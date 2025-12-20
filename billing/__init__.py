@@ -32,6 +32,7 @@ Version History:
 from billing.db import init_db, get_db, create_all_tables, check_connection
 from billing.auth import init_auth
 from billing.routes import billing_bp
+from billing.admin_routes import admin_bp
 from billing.service import billing_service
 from billing.ledger import (
     get_balance, get_balance_fast, has_credits,
@@ -46,6 +47,7 @@ from billing.config import (
     PRODUCTS, get_product, get_purchasable_products,
     CREDITS_PER_DOCUMENT, SIGNUP_BONUS_CREDITS
 )
+from billing.admin_models import DocumentSession, APICall, DailyStats
 
 
 def init_billing(app):
@@ -80,6 +82,7 @@ __all__ = [
     
     # Routes
     'billing_bp',
+    'admin_bp',
     
     # Service
     'billing_service',
@@ -106,4 +109,9 @@ __all__ = [
     'get_purchasable_products',
     'CREDITS_PER_DOCUMENT',
     'SIGNUP_BONUS_CREDITS',
+    
+    # Admin analytics models
+    'DocumentSession',
+    'APICall',
+    'DailyStats',
 ]
