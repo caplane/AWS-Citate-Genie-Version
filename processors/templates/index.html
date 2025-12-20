@@ -1,0 +1,3431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CitateGenie - Intelligent Citation Formatter</title>
+    <meta name="description" content="CitateGenie automatically formats your citations in any style. Upload your document, review the suggestions, and download perfectly formatted references.">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&display=swap');
+        
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --accent-color: #667eea;
+            --success-color: #27ae60;
+            --warning-color: #f39c12;
+            --background: #f8f9fa;
+            --card-bg: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #7f8c8d;
+            --border-radius: 12px;
+            --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        
+        .serif { font-family: 'Merriweather', serif; }
+
+        /* Landing Page Styles */
+        .landing-page {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 70px 20px 20px 20px; /* Added top padding for user bar */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .landing-container {
+            max-width: 700px;
+            width: 100%;
+            margin: 0 auto;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .landing-header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: white;
+        }
+
+        .landing-header h1 {
+            font-size: 2.8rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+            font-weight: 700;
+        }
+
+        .version-badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-bottom: 15px;
+            backdrop-filter: blur(10px);
+        }
+
+        .landing-header p {
+            font-size: 1.15rem;
+            opacity: 0.95;
+            max-width: 550px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        .main-card {
+            background: var(--card-bg);
+            border-radius: var(--border-radius);
+            padding: 35px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+        }
+
+        .style-selector {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 1rem;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        .style-selector:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .style-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .output-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.75rem;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+        
+        .output-footnote { background: #dbeafe; color: #1e40af; }
+        .output-author-date { background: #d1fae5; color: #047857; }
+        .output-numbered { background: #fef3c7; color: #92400e; }
+
+        .file-upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 12px;
+            padding: 50px 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #fafafa;
+        }
+
+        .file-upload-area:hover {
+            border-color: var(--accent-color);
+            background: #f0f4ff;
+        }
+
+        .file-upload-area.drag-over {
+            border-color: var(--success-color);
+            background: #e8f5e9;
+        }
+
+        .file-upload-icon {
+            font-size: 48px;
+            color: #9ca3af;
+            margin-bottom: 15px;
+        }
+
+        .file-upload-area:hover .file-upload-icon {
+            color: var(--accent-color);
+        }
+
+        .file-upload-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+
+        .file-upload-subtitle {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .file-selected {
+            display: none;
+            background: #eff6ff;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-top: 15px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .file-selected.show {
+            display: flex;
+        }
+
+        .file-selected-name {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #1e40af;
+            font-weight: 500;
+        }
+
+        .file-selected-remove {
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            padding: 5px;
+        }
+
+        .file-selected-remove:hover {
+            color: #ef4444;
+        }
+
+        .btn {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .info-box {
+            background: linear-gradient(135deg, #e8f4fd 0%, #dbeafe 100%);
+            border-left: 4px solid var(--secondary-color);
+            padding: 18px 22px;
+            margin-top: 25px;
+            border-radius: 0 10px 10px 0;
+        }
+
+        .info-box-title {
+            font-weight: 700;
+            color: #1e40af;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .info-box ol {
+            margin: 0;
+            padding-left: 20px;
+            color: #374151;
+        }
+
+        .info-box li {
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-container.active {
+            display: block;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: #e1e8ed;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            text-align: center;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .footer-links {
+            text-align: center;
+            margin-top: 20px;
+            color: rgba(255,255,255,0.8);
+            font-size: 0.85rem;
+        }
+
+        .footer-links a {
+            color: rgba(255,255,255,0.9);
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        .footer-links a:hover {
+            text-decoration: underline;
+        }
+
+        /* Workbench Styles */
+        .workbench {
+            display: none;
+            height: 100vh;
+            flex-direction: column;
+            overflow: hidden;
+            background: #f8fafc;
+            padding-top: 50px; /* Added for user bar */
+        }
+
+        .workbench.active {
+            display: flex;
+        }
+
+        .workbench-header {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .workbench-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .workbench-logo-icon {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            font-size: 1.1rem;
+        }
+
+        .workbench-logo-text h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .workbench-logo-text p {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        .workbench-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .progress-badge {
+            font-size: 0.75rem;
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        .btn-reset {
+            background: none;
+            border: none;
+            color: #6b7280;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-reset:hover {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .workbench-main {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 340px;
+            background: white;
+            border-right: 1px solid #e5e7eb;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #f3f4f6;
+            background: linear-gradient(to bottom, #f9fafb, white);
+        }
+
+        .file-display {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #eff6ff;
+            padding: 10px 14px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .file-display-name {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #1e40af;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sidebar-stats {
+            padding: 10px 16px;
+            border-bottom: 1px solid #f3f4f6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sidebar-stats-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .sidebar-stats-counts {
+            display: flex;
+            gap: 8px;
+        }
+
+        .count-badge {
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+
+        .count-badge-total {
+            background: #f3f4f6;
+            color: #4b5563;
+        }
+
+        .count-badge-accepted {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .citation-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        .citation-list-empty {
+            text-align: center;
+            padding: 48px 20px;
+            color: #9ca3af;
+        }
+
+        .citation-list-empty i {
+            font-size: 3rem;
+            margin-bottom: 12px;
+            opacity: 0.3;
+        }
+
+        .citation-item {
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid #e5e7eb;
+            background: white;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .citation-item:hover {
+            border-color: #9ca3af;
+        }
+
+        .citation-item.active {
+            border-color: #3b82f6;
+            background: #eff6ff;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .citation-item.accepted {
+            border-left: 3px solid #22c55e;
+            background: #f0fdf4;
+        }
+
+        .citation-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .citation-item-num {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: #9ca3af;
+        }
+
+        .citation-item-text {
+            font-size: 0.875rem;
+            color: #374151;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .citation-item-status {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .download-area {
+            padding: 16px;
+            border-top: 1px solid #e5e7eb;
+            display: none;
+        }
+
+        .download-area.show {
+            display: block;
+        }
+
+        .btn-download {
+            width: 100%;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .btn-download:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+        }
+
+        /* Editor Panel */
+        .editor-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .editor-empty {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .editor-empty-content {
+            text-align: center;
+            max-width: 400px;
+        }
+
+        .editor-empty-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+
+        .editor-empty-icon i {
+            font-size: 2rem;
+            color: #6366f1;
+        }
+
+        .editor-empty h2 {
+            font-size: 1.25rem;
+            color: #374151;
+            margin-bottom: 8px;
+        }
+
+        .editor-empty p {
+            font-size: 0.9rem;
+            color: #6b7280;
+        }
+
+        .editor-header {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .editor-header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .editor-num-badge {
+            background: #22c55e;
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 6px 12px;
+            border-radius: 20px;
+        }
+
+        .editor-header-text h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .editor-header-text p {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        .editor-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .type-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            border-radius: 4px;
+            background: #f3f4f6;
+            color: #4b5563;
+        }
+
+        .nav-btn {
+            background: none;
+            border: none;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .nav-position {
+            font-size: 0.75rem;
+            color: #6b7280;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .editor-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .editor-content-inner {
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        .editor-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            overflow: hidden;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        .editor-card-header {
+            padding: 12px 20px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .editor-card-header.original {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            border-color: #fcd34d;
+        }
+
+        .editor-card-header.final {
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+            border-color: #93c5fd;
+        }
+
+        .editor-card-header p {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .editor-card-header.original p { color: #92400e; }
+        .editor-card-header.final p { color: #1e40af; }
+
+        .editor-card-body {
+            padding: 20px;
+        }
+
+        .editor-card-body.original p {
+            font-style: italic;
+            color: #4b5563;
+            line-height: 1.7;
+        }
+
+        .editor-card.final-card {
+            border: 2px solid #93c5fd;
+            box-shadow: 0 0 0 4px rgba(147, 197, 253, 0.2);
+        }
+
+        .editor-textarea {
+            width: 100%;
+            padding: 16px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 1rem;
+            line-height: 1.6;
+            resize: vertical;
+            min-height: 120px;
+            font-family: inherit;
+        }
+
+        .editor-textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .editor-card-footer {
+            padding: 16px 20px;
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-accept {
+            flex: 1;
+            background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .btn-accept:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-accept.success {
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+        }
+
+        .btn-icon {
+            background: white;
+            border: 1px solid #d1d5db;
+            padding: 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+
+        .btn-icon:hover {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+
+        .alternatives-section {
+            margin-top: 24px;
+        }
+
+        .alternatives-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .alternatives-title {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6b7280;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-refresh {
+            background: none;
+            border: none;
+            color: #3b82f6;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn-refresh:hover {
+            color: #1d4ed8;
+        }
+
+        .alternative-card {
+            padding: 16px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e5e7eb;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .alternative-card:hover {
+            border-color: #3b82f6;
+            background: #f8faff;
+        }
+
+        .alternative-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .alternative-badges {
+            display: flex;
+            gap: 6px;
+        }
+
+        .alternative-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #1f2937;
+            margin-bottom: 4px;
+        }
+
+        .alternative-authors {
+            font-size: 0.8rem;
+            color: #6b7280;
+        }
+
+        .alternative-journal {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            font-style: italic;
+            margin-top: 4px;
+        }
+
+        /* Success Panel */
+        .success-panel {
+            flex: 1;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+        }
+
+        .success-panel.active {
+            display: flex;
+        }
+
+        .success-content {
+            text-align: center;
+            max-width: 450px;
+        }
+
+        .success-icon {
+            width: 96px;
+            height: 96px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            border-radius: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            box-shadow: 0 10px 25px rgba(34, 197, 94, 0.3);
+        }
+
+        .success-icon i {
+            font-size: 2.5rem;
+            color: white;
+        }
+
+        .success-content h2 {
+            font-size: 1.5rem;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .success-content > p {
+            color: #6b7280;
+            margin-bottom: 24px;
+        }
+
+        .success-stats {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            padding: 24px;
+            margin-bottom: 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .success-stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .success-stat-value.total { color: #374151; }
+        .success-stat-value.accepted { color: #22c55e; }
+
+        .success-stat-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        .success-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .btn-success-download {
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            border: none;
+            padding: 16px;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: all 0.2s;
+        }
+
+        .btn-success-download:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(34, 197, 94, 0.3);
+        }
+
+        .btn-secondary {
+            background: white;
+            border: 1px solid #d1d5db;
+            color: #374151;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-secondary:hover {
+            background: #f9fafb;
+        }
+
+        .btn-link {
+            background: none;
+            border: none;
+            color: #6b7280;
+            font-size: 0.875rem;
+            cursor: pointer;
+            margin-top: 16px;
+        }
+
+        .btn-link:hover {
+            color: #374151;
+        }
+
+        /* Processing Overlay */
+        .processing-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .processing-overlay.active {
+            display: flex;
+        }
+
+        .processing-modal {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+        }
+
+        .processing-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+
+        .processing-icon i {
+            font-size: 1.5rem;
+            color: white;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .processing-modal h3 {
+            font-size: 1.25rem;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .processing-modal > p {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-bottom: 24px;
+        }
+
+        .processing-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 0.875rem;
+            color: #4b5563;
+        }
+
+        .processing-dot {
+            width: 8px;
+            height: 8px;
+            background: #3b82f6;
+            border-radius: 50%;
+            animation: ping 1s ease-in-out infinite;
+        }
+
+        @keyframes ping {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.5); opacity: 0.5; }
+        }
+
+        .processing-bar {
+            height: 6px;
+            background: #e5e7eb;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .processing-bar-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .processing-note {
+            font-size: 0.75rem;
+            color: #9ca3af;
+            margin-top: 16px;
+        }
+
+        /* Type badges */
+        .badge-legal { background: #fef3c7; color: #92400e; }
+        .badge-journal { background: #d1fae5; color: #065f46; }
+        .badge-book { background: #dbeafe; color: #1e40af; }
+        .badge-medical { background: #fce7f3; color: #9d174d; }
+        .badge-url { background: #e0f2fe; color: #0369a1; }
+        .badge-newspaper { background: #fef9c3; color: #854d0e; }
+        .badge-government { background: #f3e8ff; color: #7c3aed; }
+        .badge-unknown { background: #f1f5f9; color: #475569; }
+
+        /* Loader */
+        .loader {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e5e7eb;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* Hide landing when workbench active */
+        .landing-page.hidden { display: none; }
+
+        /* =============================================================================
+           BILLING SYSTEM STYLES
+           ============================================================================= */
+
+        /* Auth Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 420px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .modal-header h2 {
+            font-size: 1.5rem;
+            color: var(--primary-color);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 4px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .modal-close:hover {
+            background: #f0f0f0;
+            color: var(--text-primary);
+        }
+
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .auth-tab {
+            flex: 1;
+            padding: 12px;
+            background: none;
+            border: none;
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .auth-tab.active {
+            color: var(--accent-color);
+            border-bottom-color: var(--accent-color);
+        }
+
+        .auth-form {
+            display: none;
+        }
+
+        .auth-form.active {
+            display: block;
+        }
+
+        .auth-form .form-group {
+            margin-bottom: 20px;
+        }
+
+        .auth-form .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .auth-form .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+
+        .auth-form .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .auth-submit {
+            width: 100%;
+            padding: 14px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .auth-submit:hover {
+            background: #5a6fd6;
+            transform: translateY(-1px);
+        }
+
+        .auth-submit:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .auth-error {
+            background: #fee;
+            color: #c00;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .auth-error.show {
+            display: block;
+        }
+
+        .auth-bonus {
+            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .auth-bonus i {
+            color: var(--success-color);
+            margin-right: 8px;
+        }
+
+        /* User Bar Styles */
+        .user-bar {
+            position: fixed;
+            top: 0;
+            right: 0;
+            left: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 16px;
+            z-index: 1000;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .user-bar.hidden {
+            display: none;
+        }
+
+        .credit-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        .credit-display i {
+            font-size: 1.1rem;
+        }
+
+        .credit-count {
+            font-weight: 700;
+        }
+
+        .user-email {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .user-bar-btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            font-size: 0.9rem;
+        }
+
+        .btn-buy-credits {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .btn-buy-credits:hover {
+            background: #219a52;
+        }
+
+        .btn-login {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .btn-login:hover {
+            background: #5a6fd6;
+        }
+
+        .btn-logout {
+            background: #f0f0f0;
+            color: var(--text-secondary);
+        }
+
+        .btn-logout:hover {
+            background: #e0e0e0;
+        }
+
+        /* Buy Credits Modal */
+        .products-grid {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .product-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .product-card:hover {
+            border-color: var(--accent-color);
+            transform: translateY(-2px);
+        }
+
+        .product-card.selected {
+            border-color: var(--accent-color);
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .product-badge {
+            position: absolute;
+            top: -10px;
+            right: 16px;
+            background: var(--success-color);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .product-name {
+            font-weight: 600;
+            font-size: 1.1rem;
+            margin-bottom: 4px;
+        }
+
+        .product-credits {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+        }
+
+        .product-price {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-color);
+        }
+
+        .product-per-credit {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        /* Preview Banner */
+        .preview-banner {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .preview-banner.hidden {
+            display: none;
+        }
+
+        .preview-banner i {
+            color: #856404;
+            font-size: 1.3rem;
+        }
+
+        .preview-banner-text {
+            flex: 1;
+        }
+
+        .preview-banner-text strong {
+            color: #856404;
+        }
+
+        .preview-banner-btn {
+            background: var(--accent-color);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .preview-banner-btn:hover {
+            background: #5a6fd6;
+        }
+
+        /* Notification toast */
+        @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(100px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes fadeOutRight {
+            from { opacity: 1; transform: translateX(0); }
+            to { opacity: 0; transform: translateX(100px); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- =============================================================================
+         USER BAR (shows at top of page)
+         ============================================================================= -->
+    <div id="user-bar" class="user-bar hidden">
+        <div id="user-info-logged-out">
+            <button class="user-bar-btn btn-login" onclick="showAuthModal('login')">
+                <i class="fas fa-sign-in-alt"></i> Log In
+            </button>
+        </div>
+        <div id="user-info-logged-in" style="display: none;">
+            <span class="user-email" id="user-email-display"></span>
+            <div class="credit-display">
+                <i class="fas fa-coins"></i>
+                <span class="credit-count" id="credit-count">0</span> credits
+            </div>
+            <button class="user-bar-btn btn-buy-credits" onclick="showBuyCreditsModal()">
+                <i class="fas fa-plus"></i> Buy Credits
+            </button>
+            <button class="user-bar-btn btn-logout" onclick="logout()">
+                <i class="fas fa-sign-out-alt"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- =============================================================================
+         AUTH MODAL (Login / Register)
+         ============================================================================= -->
+    <div id="auth-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="auth-modal-title">Welcome to CitateGenie</h2>
+                <button class="modal-close" onclick="hideAuthModal()">&times;</button>
+            </div>
+            
+            <div class="auth-bonus">
+                <i class="fas fa-gift"></i>
+                <strong>Sign up and get 3 free document credits!</strong>
+            </div>
+            
+            <div id="auth-error" class="auth-error"></div>
+            
+            <div class="auth-tabs">
+                <button class="auth-tab active" onclick="switchAuthTab('login')">Log In</button>
+                <button class="auth-tab" onclick="switchAuthTab('register')">Sign Up</button>
+            </div>
+            
+            <!-- Login Form -->
+            <form id="login-form" class="auth-form active" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" required placeholder="you@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="auth-submit" id="login-submit">
+                    <i class="fas fa-sign-in-alt"></i> Log In
+                </button>
+            </form>
+            
+            <!-- Register Form -->
+            <form id="register-form" class="auth-form" onsubmit="handleRegister(event)">
+                <div class="form-group">
+                    <label for="register-name">Name (optional)</label>
+                    <input type="text" id="register-name" placeholder="Your name">
+                </div>
+                <div class="form-group">
+                    <label for="register-email">Email</label>
+                    <input type="email" id="register-email" required placeholder="you@example.com">
+                </div>
+                <div class="form-group">
+                    <label for="register-password">Password</label>
+                    <input type="password" id="register-password" required minlength="8" placeholder="At least 8 characters">
+                </div>
+                <button type="submit" class="auth-submit" id="register-submit">
+                    <i class="fas fa-user-plus"></i> Create Account
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- =============================================================================
+         BUY CREDITS MODAL
+         ============================================================================= -->
+    <div id="credits-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Buy Credits</h2>
+                <button class="modal-close" onclick="hideBuyCreditsModal()">&times;</button>
+            </div>
+            
+            <p style="margin-bottom: 20px; color: var(--text-secondary);">
+                Each credit lets you process and download one document.
+            </p>
+            
+            <div id="products-container" class="products-grid">
+                <!-- Products loaded dynamically -->
+            </div>
+            
+            <button id="checkout-btn" class="auth-submit" onclick="startCheckout()" disabled>
+                <i class="fas fa-credit-card"></i> Continue to Payment
+            </button>
+        </div>
+    </div>
+
+    <!-- LANDING PAGE -->
+    <div id="landing-page" class="landing-page">
+        <div class="landing-container">
+            <header class="landing-header">
+                <div class="version-badge">Version 3.1</div>
+                <h1>✨ CitateGenie</h1>
+                <p>Automatically format your citations in any style. Upload your document, review AI-powered suggestions, and download perfectly formatted references.</p>
+            </header>
+
+            <div class="main-card">
+                <div class="form-group">
+                    <label for="style-selector">
+                        <i class="fas fa-book-open" style="color: #667eea; margin-right: 6px;"></i>
+                        Citation Style
+                    </label>
+                    <select id="style-selector" class="style-selector" onchange="updateStyleInfo()">
+                        <optgroup label="📝 Footnote/Endnote Styles">
+                            <option value="Chicago Manual of Style">Chicago Notes-Bibliography (17th ed.)</option>
+                            <option value="Bluebook">Bluebook (US Legal)</option>
+                            <option value="OSCOLA">OSCOLA (UK Legal)</option>
+                        </optgroup>
+                        <optgroup label="📖 Author-Date Styles">
+                            <option value="APA 7">APA 7th Edition</option>
+                            <option value="MLA 9">MLA 9th Edition</option>
+                            <option value="Chicago Author-Date">Chicago Author-Date</option>
+                            <option value="Harvard">Harvard</option>
+                            <option value="ASA">ASA (Sociology)</option>
+                        </optgroup>
+                        <optgroup label="🔬 Numbered/Scientific Styles">
+                            <option value="Vancouver">Vancouver (Medical/NLM)</option>
+                        </optgroup>
+                    </select>
+                    <div class="style-info">
+                        <span id="style-output-badge" class="output-badge output-footnote">
+                            <i class="fas fa-superscript"></i> Footnotes
+                        </span>
+                        <span id="style-bib-title">→ Bibliography</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <i class="fas fa-file-word" style="color: #667eea; margin-right: 6px;"></i>
+                        Upload Document
+                    </label>
+                    <input type="file" id="file-input" accept=".docx" style="display: none;">
+                    <div id="drop-zone" class="file-upload-area" onclick="document.getElementById('file-input').click()">
+                        <div class="file-upload-icon">
+                            <i class="fas fa-cloud-upload-alt"></i>
+                        </div>
+                        <p class="file-upload-title">Drop your .docx file here</p>
+                        <p class="file-upload-subtitle">or click to browse</p>
+                    </div>
+                    <div id="file-selected" class="file-selected">
+                        <span class="file-selected-name">
+                            <i class="fas fa-file-word"></i>
+                            <span id="file-name"></span>
+                        </span>
+                        <button class="file-selected-remove" onclick="clearFile(event)">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button id="process-btn" class="btn btn-primary" onclick="processDocument()" disabled>
+                    <i class="fas fa-magic"></i>
+                    Process Citations
+                </button>
+
+                <div id="progress-container" class="progress-container">
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text">Uploading document...</p>
+                </div>
+
+                <div class="info-box">
+                    <p class="info-box-title">
+                        <i class="fas fa-lightbulb"></i>
+                        How It Works
+                    </p>
+                    <ol>
+                        <li>Select your citation style above</li>
+                        <li>Upload your Word document (.docx)</li>
+                        <li>Review each citation and select the best match</li>
+                        <li>Download your perfectly formatted document</li>
+                    </ol>
+                </div>
+            </div>
+
+            <div class="footer-links">
+                <span>© 2025 CitateGenie</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- WORKBENCH -->
+    <div id="workbench" class="workbench">
+        <header class="workbench-header">
+            <div class="workbench-logo">
+                <div class="workbench-logo-icon">
+                    <i class="fas fa-quote-left"></i>
+                </div>
+                <div class="workbench-logo-text">
+                    <h1>CitateGenie</h1>
+                    <p>Citation Workbench <span style="color: #3b82f6;">v3.1</span></p>
+                </div>
+            </div>
+            <div class="workbench-actions">
+                <div id="output-type-badge" class="output-badge output-footnote">
+                    <i class="fas fa-superscript"></i> Footnotes
+                </div>
+                <div id="header-progress-badge" class="progress-badge">
+                    <span id="header-progress-text">0/0 reviewed</span>
+                </div>
+                <button class="btn-reset" onclick="resetDocument()">
+                    <i class="fas fa-redo"></i> Reset
+                </button>
+            </div>
+        </header>
+
+        <main class="workbench-main">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <div class="file-display">
+                        <span class="file-display-name">
+                            <i class="fas fa-file-word"></i>
+                            <span id="sidebar-file-name">document.docx</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="sidebar-stats">
+                    <span class="sidebar-stats-label">Citations</span>
+                    <div class="sidebar-stats-counts">
+                        <span id="accepted-count" class="count-badge count-badge-accepted" style="display: none;">0 accepted</span>
+                        <span id="citation-count" class="count-badge count-badge-total">0 total</span>
+                    </div>
+                </div>
+                <div id="citation-list" class="citation-list">
+                    <div class="citation-list-empty">
+                        <i class="fas fa-inbox"></i>
+                        <p>Citations will appear here</p>
+                    </div>
+                </div>
+                <div id="download-area" class="download-area">
+                    <button class="btn-download" onclick="downloadDocument()">
+                        <i class="fas fa-download"></i>
+                        Download Document
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Editor Panel -->
+            <section class="editor-panel">
+                <!-- Empty State -->
+                <div id="panel-empty" class="editor-empty">
+                    <div class="editor-empty-content">
+                        <div class="editor-empty-icon">
+                            <i class="fas fa-mouse-pointer"></i>
+                        </div>
+                        <h2>Select a Citation</h2>
+                        <p>Click on a citation from the list to review and edit it.</p>
+                    </div>
+                </div>
+
+                <!-- Author-Date Editor -->
+                <div id="panel-editor" style="display: none; flex-direction: column; flex: 1; overflow: hidden;">
+                    <div class="editor-header">
+                        <div class="editor-header-left">
+                            <span id="editor-citation-num" class="editor-num-badge">#1</span>
+                            <div class="editor-header-text">
+                                <h3>Resolve Citation</h3>
+                                <p>Edit or select an alternative below</p>
+                            </div>
+                        </div>
+                        <div class="editor-nav">
+                            <button id="btn-prev" class="nav-btn" onclick="adNavigate(-1)" disabled>
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <span id="editor-position" class="nav-position">1 of 5</span>
+                            <button id="btn-next" class="nav-btn" onclick="adNavigate(1)">
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="editor-content">
+                        <div class="editor-content-inner">
+                            <div class="editor-card">
+                                <div class="editor-card-header original">
+                                    <p><i class="fas fa-file-alt"></i> Original in Document</p>
+                                </div>
+                                <div class="editor-card-body original">
+                                    <p id="original-citation-text">(Smith, 2020)</p>
+                                </div>
+                            </div>
+
+                            <div class="editor-card final-card">
+                                <div class="editor-card-header final">
+                                    <p><i class="fas fa-pen-nib"></i> Final Citation</p>
+                                </div>
+                                <div class="editor-card-body">
+                                    <textarea id="ad-final-textarea" class="editor-textarea" placeholder="Auto-resolved citation will appear here..."></textarea>
+                                </div>
+                                <div class="editor-card-footer">
+                                    <button id="ad-commit-btn" class="btn-accept" onclick="adCommitChange()">
+                                        <i class="fas fa-check"></i> Accept & Save
+                                    </button>
+                                    <button class="btn-icon" onclick="adCopyToClipboard()" title="Copy to clipboard">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                    <button class="btn-icon" onclick="adKeepOriginal()" title="Keep original">
+                                        <i class="fas fa-undo"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="alternatives-section">
+                                <div class="alternatives-header">
+                                    <span class="alternatives-title">
+                                        <i class="fas fa-list"></i> Options
+                                    </span>
+                                    <button class="btn-refresh" onclick="adRefreshAlternatives()">
+                                        <i class="fas fa-sync-alt"></i> Refresh
+                                    </button>
+                                </div>
+                                <div id="ad-alternatives-list">
+                                    <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                                        <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
+                                        <p>Loading alternatives...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footnote Editor -->
+                <div id="panel-footnote-editor" style="display: none; flex-direction: column; flex: 1; overflow: hidden;">
+                    <div class="editor-header">
+                        <div class="editor-header-left">
+                            <span id="fn-editor-num" class="editor-num-badge" style="background: #3b82f6;">Note 1</span>
+                            <div class="editor-header-text">
+                                <h3>Resolve Citation</h3>
+                                <p>Edit or select an alternative below</p>
+                            </div>
+                        </div>
+                        <div class="editor-nav">
+                            <button id="fn-btn-prev" class="nav-btn" onclick="fnNavigate(-1)" disabled>
+                                <i class="fas fa-chevron-left"></i>
+                            </button>
+                            <span id="fn-editor-position" class="nav-position">1 of 5</span>
+                            <button id="fn-btn-next" class="nav-btn" onclick="fnNavigate(1)">
+                                <i class="fas fa-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="editor-content">
+                        <div class="editor-content-inner">
+                            <div class="editor-card">
+                                <div class="editor-card-header original">
+                                    <p><i class="fas fa-file-alt"></i> Original Citation</p>
+                                </div>
+                                <div class="editor-card-body original">
+                                    <p id="fn-original-text">Citation text here...</p>
+                                </div>
+                            </div>
+
+                            <div class="editor-card final-card">
+                                <div class="editor-card-header final">
+                                    <p><i class="fas fa-pen-nib"></i> Final Citation</p>
+                                </div>
+                                <div class="editor-card-body">
+                                    <textarea id="fn-final-textarea" class="editor-textarea" placeholder="Auto-resolved citation will appear here..."></textarea>
+                                </div>
+                                <div class="editor-card-footer">
+                                    <button id="fn-commit-btn" class="btn-accept" onclick="fnCommitChange()">
+                                        <i class="fas fa-check"></i> Accept & Save
+                                    </button>
+                                    <button class="btn-icon" onclick="fnCopyToClipboard()" title="Copy to clipboard">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                    <button class="btn-icon" onclick="fnAppendMode()" title="Append another source">
+                                        <i class="fas fa-plus"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="alternatives-section">
+                                <div class="alternatives-header">
+                                    <span class="alternatives-title">
+                                        <i class="fas fa-list"></i> Options
+                                    </span>
+                                    <button class="btn-refresh" onclick="fnSearchAlternatives()">
+                                        <i class="fas fa-sync-alt"></i> Refresh
+                                    </button>
+                                </div>
+                                <div id="fn-alternatives-list">
+                                    <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                                        <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
+                                        <p>Loading alternatives...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success Panel -->
+                <div id="panel-success" class="success-panel">
+                    <div class="success-content">
+                        <div class="success-icon">
+                            <i class="fas fa-check"></i>
+                        </div>
+                        <h2>All Citations Reviewed!</h2>
+                        <p>Your document is ready with properly formatted references.</p>
+                        <div class="success-stats">
+                            <div>
+                                <p id="final-total" class="success-stat-value total">0</p>
+                                <p class="success-stat-label">Citations Found</p>
+                            </div>
+                            <div>
+                                <p id="final-accepted" class="success-stat-value accepted">0</p>
+                                <p class="success-stat-label">References Added</p>
+                            </div>
+                        </div>
+                        <div class="success-actions">
+                            <button class="btn-success-download" onclick="downloadDocument()">
+                                <i class="fas fa-download"></i>
+                                Download Processed Document
+                            </button>
+                            <button class="btn-secondary" onclick="exportMetadataCSV()">
+                                <i class="fas fa-file-csv"></i>
+                                Export Citations as CSV
+                            </button>
+                            <button class="btn-secondary" onclick="backToReview()">
+                                <i class="fas fa-edit"></i>
+                                Back to Review
+                            </button>
+                        </div>
+                        <button class="btn-link" onclick="resetDocument()">
+                            <i class="fas fa-redo"></i> Process Another Document
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Processing Overlay -->
+    <div id="processing-overlay" class="processing-overlay">
+        <div class="processing-modal">
+            <div class="processing-icon">
+                <i class="fas fa-magic"></i>
+            </div>
+            <h3>Processing Document</h3>
+            <p>Looking up your citations...</p>
+            <div class="processing-status">
+                <span class="processing-dot"></span>
+                <span id="processing-step">Extracting citations...</span>
+            </div>
+            <div class="processing-bar">
+                <div id="processing-progress" class="processing-bar-fill" style="width: 10%;"></div>
+            </div>
+            <p class="processing-note">This may take a moment for documents with many citations</p>
+        </div>
+    </div>
+
+    <script>
+        /*
+         * CitateGenie 3.1 - Redesigned UI
+         * Beautiful landing page + powerful workbench
+         */
+        
+        // ========== STATE ==========
+        let currentSessionId = null;
+        let currentCitations = [];
+        let activeCitationIndex = -1;
+        let selectedOptionIndex = 0;
+        let outputType = 'footnote';
+        let currentStyle = 'Chicago Manual of Style';
+        
+        const STYLE_INFO = {
+            'Chicago Manual of Style': { type: 'footnote', bib: 'Bibliography' },
+            'Bluebook': { type: 'footnote', bib: 'Bibliography' },
+            'OSCOLA': { type: 'footnote', bib: 'Bibliography' },
+            'APA 7': { type: 'author-date', bib: 'References' },
+            'MLA 9': { type: 'author-date', bib: 'Works Cited' },
+            'Chicago Author-Date': { type: 'author-date', bib: 'References' },
+            'Harvard': { type: 'author-date', bib: 'Reference List' },
+            'ASA': { type: 'author-date', bib: 'References' },
+            'Vancouver': { type: 'numbered', bib: 'References' },
+        };
+        
+        // ========== INITIALIZATION ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            const fileInput = document.getElementById('file-input');
+            const dropZone = document.getElementById('drop-zone');
+            
+            fileInput.addEventListener('change', handleFileSelect);
+            
+            // Drag and drop
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-over'), false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-over'), false);
+            });
+            
+            dropZone.addEventListener('drop', handleDrop, false);
+            
+            updateStyleInfo();
+        });
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        function handleDrop(e) {
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].name.endsWith('.docx')) {
+                document.getElementById('file-input').files = files;
+                showSelectedFile(files[0].name);
+            }
+        }
+        
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) {
+                showSelectedFile(e.target.files[0].name);
+            }
+        }
+        
+        function showSelectedFile(name) {
+            document.getElementById('file-name').textContent = name;
+            document.getElementById('file-selected').classList.add('show');
+            document.getElementById('drop-zone').style.display = 'none';
+            document.getElementById('process-btn').disabled = false;
+        }
+        
+        function clearFile(e) {
+            e.stopPropagation();
+            document.getElementById('file-input').value = '';
+            document.getElementById('file-selected').classList.remove('show');
+            document.getElementById('drop-zone').style.display = 'block';
+            document.getElementById('process-btn').disabled = true;
+        }
+        
+        // ========== STYLE INFO ==========
+        function updateStyleInfo() {
+            currentStyle = document.getElementById('style-selector').value;
+            const info = STYLE_INFO[currentStyle] || { type: 'footnote', bib: 'Bibliography' };
+            outputType = info.type;
+            
+            const badge = document.getElementById('style-output-badge');
+            const bibTitle = document.getElementById('style-bib-title');
+            
+            if (info.type === 'footnote') {
+                badge.innerHTML = '<i class="fas fa-superscript"></i> Footnotes';
+                badge.className = 'output-badge output-footnote';
+            } else if (info.type === 'numbered') {
+                badge.innerHTML = '<i class="fas fa-list-ol"></i> Numbered';
+                badge.className = 'output-badge output-numbered';
+            } else {
+                badge.innerHTML = '<i class="fas fa-user-clock"></i> Author-Date';
+                badge.className = 'output-badge output-author-date';
+            }
+            
+            bibTitle.textContent = `→ ${info.bib}`;
+        }
+        
+        // ========== PROCESS DOCUMENT ==========
+        async function processDocument() {
+            const fileInput = document.getElementById('file-input');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a file first');
+                return;
+            }
+            
+            // Show progress
+            document.getElementById('progress-container').classList.add('active');
+            document.getElementById('process-btn').disabled = true;
+            showProcessingOverlay();
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('style', currentStyle);
+            
+            const styleInfo = STYLE_INFO[currentStyle] || { type: 'footnote' };
+            const endpoint = styleInfo.type === 'author-date' 
+                ? '/api/process-author-date' 
+                : '/api/process';
+            
+            try {
+                updateProcessingStatus('Uploading document...', 20);
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                // Handle rate limit (preview limit reached)
+                if (response.status === 429) {
+                    const data = await response.json();
+                    hideProcessingOverlay();
+                    document.getElementById('progress-container').classList.remove('active');
+                    document.getElementById('process-btn').disabled = false;
+                    showNotification(data.error || 'Preview limit reached. Please sign up for unlimited access.', 'warning');
+                    showAuthModal('register');
+                    return;
+                }
+                
+                updateProcessingStatus('Processing citations...', 60);
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Processing failed');
+                }
+                
+                updateProcessingStatus('Preparing review...', 90);
+                
+                currentSessionId = data.session_id;
+                currentCitations = data.citations || data.notes || [];
+                
+                // Track preview mode
+                if (data.is_preview) {
+                    isPreviewMode = true;
+                    showPreviewBanner(data.remaining_previews);
+                } else {
+                    isPreviewMode = false;
+                    hidePreviewBanner();
+                }
+                
+                if (currentCitations.length === 0) {
+                    hideProcessingOverlay();
+                    document.getElementById('progress-container').classList.remove('active');
+                    document.getElementById('process-btn').disabled = false;
+                    alert('No citations found in document');
+                    return;
+                }
+                
+                // Switch to workbench
+                document.getElementById('landing-page').classList.add('hidden');
+                document.getElementById('workbench').classList.add('active');
+                
+                // Update workbench header
+                document.getElementById('sidebar-file-name').textContent = file.name;
+                document.getElementById('citation-count').textContent = `${currentCitations.length} total`;
+                
+                const headerBadge = document.getElementById('output-type-badge');
+                if (outputType === 'footnote') {
+                    headerBadge.innerHTML = '<i class="fas fa-superscript"></i> Footnotes';
+                    headerBadge.className = 'output-badge output-footnote';
+                } else if (outputType === 'numbered') {
+                    headerBadge.innerHTML = '<i class="fas fa-list-ol"></i> Numbered';
+                    headerBadge.className = 'output-badge output-numbered';
+                } else {
+                    headerBadge.innerHTML = '<i class="fas fa-user-clock"></i> Author-Date';
+                    headerBadge.className = 'output-badge output-author-date';
+                }
+                
+                // Render citations and load editor
+                if (outputType === 'author-date') {
+                    renderCitationList();
+                    selectCitation(0);
+                    document.getElementById('panel-empty').style.display = 'none';
+                    document.getElementById('panel-editor').style.display = 'flex';
+                    document.getElementById('panel-footnote-editor').style.display = 'none';
+                } else {
+                    fnRenderCitationList();
+                    fnLoadEditor(0);
+                    document.getElementById('panel-empty').style.display = 'none';
+                    document.getElementById('panel-editor').style.display = 'none';
+                    document.getElementById('panel-footnote-editor').style.display = 'flex';
+                    document.getElementById('download-area').classList.add('show');
+                }
+                
+                updateProgressBadge();
+                hideProcessingOverlay();
+                
+            } catch (error) {
+                console.error('Upload error:', error);
+                hideProcessingOverlay();
+                document.getElementById('progress-container').classList.remove('active');
+                document.getElementById('process-btn').disabled = false;
+                alert('Error processing document: ' + error.message);
+            }
+        }
+        
+        // ========== CITATION LIST (Author-Date) ==========
+        function renderCitationList() {
+            const container = document.getElementById('citation-list');
+            
+            if (currentCitations.length === 0) {
+                container.innerHTML = `
+                    <div class="citation-list-empty">
+                        <i class="fas fa-inbox"></i>
+                        <p>No citations found</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            currentCitations.forEach((cite, idx) => {
+                const isActive = idx === activeCitationIndex;
+                const isAccepted = cite.accepted;
+                
+                let classes = 'citation-item';
+                if (isActive) classes += ' active';
+                if (isAccepted) classes += ' accepted';
+                
+                const statusIcon = isAccepted 
+                    ? '<i class="fas fa-check-circle" style="color: #22c55e;"></i>'
+                    : '<i class="fas fa-clock" style="color: #f59e0b;"></i>';
+                
+                const isUrl = cite.is_url || false;
+                let displayText = cite.original || '';
+                if (isUrl && displayText.length > 40) {
+                    displayText = displayText.substring(0, 37) + '...';
+                }
+                
+                html += `
+                    <div class="${classes}" onclick="selectCitation(${idx})" id="cite-${idx}">
+                        <div class="citation-item-header">
+                            <span class="citation-item-num">#${idx + 1}</span>
+                            ${statusIcon}
+                        </div>
+                        <p class="citation-item-text">${escapeHtml(displayText)}</p>
+                        <p class="citation-item-status">${isAccepted ? '✓ Accepted' : `${cite.options?.length || 0} options found`}</p>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            updateAcceptedCount();
+        }
+        
+        // ========== SELECT CITATION (Author-Date) ==========
+        function selectCitation(idx) {
+            if (idx < 0 || idx >= currentCitations.length) return;
+            
+            activeCitationIndex = idx;
+            const cite = currentCitations[idx];
+            
+            // Update list
+            document.querySelectorAll('.citation-item').forEach((el, i) => {
+                el.classList.remove('active');
+                if (i === idx) el.classList.add('active');
+            });
+            
+            const activeEl = document.getElementById(`cite-${idx}`);
+            if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            
+            // Update editor
+            document.getElementById('editor-citation-num').textContent = `#${idx + 1}`;
+            document.getElementById('editor-position').textContent = `${idx + 1} of ${currentCitations.length}`;
+            
+            const isUrl = cite.is_url || false;
+            const originalText = cite.original || '(Unknown)';
+            
+            if (isUrl) {
+                const displayUrl = originalText.length > 60 ? originalText.substring(0, 57) + '...' : originalText;
+                document.getElementById('original-citation-text').innerHTML = 
+                    `<span style="color: #3b82f6;">${escapeHtml(displayUrl)}</span>` +
+                    (cite.parenthetical ? `<br><span style="font-size: 0.9rem; color: #6b7280;">→ Will become: <strong>${escapeHtml(cite.parenthetical)}</strong></span>` : '');
+            } else {
+                document.getElementById('original-citation-text').textContent = originalText;
+            }
+            
+            document.getElementById('btn-prev').disabled = idx === 0;
+            document.getElementById('btn-next').disabled = idx === currentCitations.length - 1;
+            
+            const textarea = document.getElementById('ad-final-textarea');
+            if (cite.formatted) {
+                textarea.value = cite.formatted;
+            } else if (cite.options && cite.options.length > 1) {
+                textarea.value = '';
+                textarea.placeholder = 'Loading recommendation...';
+                adFormatRecommendedOption(cite);
+            } else {
+                textarea.value = cite.original || '';
+            }
+            
+            adRenderAlternatives(cite);
+        }
+        
+        async function adFormatRecommendedOption(cite) {
+            if (!cite.options || cite.options.length < 2) return;
+            
+            try {
+                const response = await fetch('/api/accept-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        citation_id: cite.id || cite.note_id,
+                        selected_option: 1,
+                        style: currentStyle
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success && data.formatted) {
+                    cite.formatted = data.formatted;
+                    document.getElementById('ad-final-textarea').value = data.formatted;
+                }
+            } catch (error) {
+                console.error('Format error:', error);
+            }
+        }
+        
+        // ========== ALTERNATIVES (Author-Date) ==========
+        function adRenderAlternatives(cite) {
+            const container = document.getElementById('ad-alternatives-list');
+            const options = cite.options || [];
+            const alternatives = options.slice(1);
+            
+            if (alternatives.length === 0) {
+                container.innerHTML = `
+                    <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                        <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
+                        <p>No alternatives found</p>
+                        <p style="font-size: 0.75rem; margin-top: 4px;">Edit manually above</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            alternatives.forEach((opt, idx) => {
+                const authors = opt.authors?.length > 0 
+                    ? opt.authors.slice(0, 3).join(', ') + (opt.authors.length > 3 ? ' et al.' : '')
+                    : '';
+                
+                html += `
+                    <div class="alternative-card" onclick="adSelectAlternative(${idx + 1})">
+                        <div class="alternative-header">
+                            ${opt.year ? `<span style="font-size: 0.75rem; color: #6b7280;">${opt.year}</span>` : ''}
+                        </div>
+                        <p class="alternative-title">${escapeHtml(opt.title || 'Untitled')}</p>
+                        ${authors ? `<p class="alternative-authors">${escapeHtml(authors)}</p>` : ''}
+                        ${opt.journal ? `<p class="alternative-journal">${escapeHtml(opt.journal)}</p>` : ''}
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        async function adSelectAlternative(optionIndex) {
+            if (activeCitationIndex < 0) return;
+            
+            const cite = currentCitations[activeCitationIndex];
+            
+            try {
+                const response = await fetch('/api/accept-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        citation_id: cite.id || cite.note_id,
+                        selected_option: optionIndex,
+                        style: currentStyle
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success && data.formatted) {
+                    document.getElementById('ad-final-textarea').value = data.formatted;
+                }
+            } catch (error) {
+                console.error('Format error:', error);
+            }
+        }
+        
+        function adKeepOriginal() {
+            if (activeCitationIndex < 0) return;
+            const cite = currentCitations[activeCitationIndex];
+            document.getElementById('ad-final-textarea').value = cite.original || '';
+        }
+        
+        function adCopyToClipboard() {
+            const textarea = document.getElementById('ad-final-textarea');
+            navigator.clipboard.writeText(textarea.value);
+        }
+        
+        async function adRefreshAlternatives() {
+            if (activeCitationIndex < 0) return;
+            
+            const cite = currentCitations[activeCitationIndex];
+            const container = document.getElementById('ad-alternatives-list');
+            
+            container.innerHTML = `
+                <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                    <div class="loader" style="margin: 0 auto 12px;"></div>
+                    <p>Searching databases...</p>
+                </div>
+            `;
+            
+            try {
+                const response = await fetch('/api/cite/multiple', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: cite.original, style: currentStyle, limit: 5 })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.results?.length > 0) {
+                    window.adFreshAlternatives = data.results;
+                    
+                    container.innerHTML = data.results.map((r, i) => `
+                        <div class="alternative-card" onclick="adSelectFreshAlternative(${i})">
+                            <p style="font-size: 0.9rem; color: #374151;">${escapeHtml(r.citation)}</p>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                            <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
+                            <p>No alternatives found</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="alternative-card" style="text-align: center; color: #ef4444;">
+                        <i class="fas fa-exclamation-circle" style="font-size: 1.5rem; margin-bottom: 8px;"></i>
+                        <p>Search failed</p>
+                    </div>
+                `;
+            }
+        }
+        
+        function adSelectFreshAlternative(idx) {
+            if (window.adFreshAlternatives?.[idx]) {
+                document.getElementById('ad-final-textarea').value = window.adFreshAlternatives[idx].citation;
+            }
+        }
+        
+        // ========== COMMIT (Author-Date) ==========
+        let adSaveInProgress = false;
+        
+        async function adCommitChange() {
+            if (activeCitationIndex < 0 || !currentSessionId) return;
+            if (adSaveInProgress) return;
+            
+            adSaveInProgress = true;
+            
+            const cite = currentCitations[activeCitationIndex];
+            const newText = document.getElementById('ad-final-textarea').value;
+            
+            const btn = document.getElementById('ad-commit-btn');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<div class="loader" style="border-top-color: white;"></div>';
+            btn.disabled = true;
+            
+            try {
+                const requestBody = {
+                    session_id: currentSessionId,
+                    reference_id: cite.id || cite.note_id,
+                    formatted: newText
+                };
+                
+                if (cite.is_url) {
+                    requestBody.is_url = true;
+                    requestBody.original_url = cite.original_url || cite.original;
+                    requestBody.parenthetical = cite.parenthetical || '';
+                }
+                
+                const response = await fetch('/api/accept-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    cite.formatted = newText;
+                    cite.accepted = true;
+                    
+                    renderCitationList();
+                    updateAcceptedCount();
+                    updateProgressBadge();
+                    
+                    btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                    btn.classList.add('success');
+                    
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.classList.remove('success');
+                        btn.disabled = false;
+                        adSaveInProgress = false;
+                        
+                        if (currentCitations.every(c => c.accepted)) {
+                            showSuccessPanel();
+                        } else {
+                            const next = currentCitations.findIndex((c, i) => i > activeCitationIndex && !c.accepted);
+                            if (next !== -1) selectCitation(next);
+                        }
+                    }, 800);
+                } else {
+                    throw new Error(data.error || 'Save failed');
+                }
+            } catch (error) {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+                adSaveInProgress = false;
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        function adNavigate(delta) {
+            const newIndex = activeCitationIndex + delta;
+            if (newIndex >= 0 && newIndex < currentCitations.length) {
+                selectCitation(newIndex);
+            }
+        }
+        
+        // ========== FOOTNOTE MODE ==========
+        let fnActiveIndex = -1;
+        let fnSuccessCount = 0;
+        let fnJustSaved = false;
+        let fnSaveInProgress = false;
+        let fnSelectedOptionIndex = null;  // Track which alternative was selected (for metadata preservation)
+        
+        function fnRenderCitationList() {
+            const container = document.getElementById('citation-list');
+            
+            if (currentCitations.length === 0) {
+                container.innerHTML = `
+                    <div class="citation-list-empty">
+                        <i class="fas fa-inbox"></i>
+                        <p>No citations found</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            currentCitations.forEach((cite, idx) => {
+                const isActive = idx === fnActiveIndex;
+                const isSuccess = cite.success === true;
+                
+                let classes = 'citation-item';
+                if (isActive) classes += ' active';
+                if (isSuccess) classes += ' accepted';
+                
+                const displayText = (cite.text || cite.original || `Note ${idx + 1}`).substring(0, 50);
+                const noteId = cite.id || idx + 1;
+                
+                html += `
+                    <div id="fn-note-${noteId}" class="${classes}" onclick="fnLoadEditor(${idx})">
+                        <div class="citation-item-header">
+                            <span class="citation-item-num">Note ${noteId}</span>
+                            ${isSuccess ? '<i class="fas fa-check-circle" style="color: #22c55e;"></i>' : '<i class="fas fa-clock" style="color: #f59e0b;"></i>'}
+                        </div>
+                        <p class="citation-item-text">${escapeHtml(displayText)}${displayText.length >= 50 ? '...' : ''}</p>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        function fnLoadEditor(idx) {
+            if (fnSaveInProgress) return;
+            
+            fnActiveIndex = idx;
+            fnJustSaved = false;
+            fnSelectedOptionIndex = null;  // Reset selection when loading new citation
+            const cite = currentCitations[idx];
+            const noteId = cite.id || idx + 1;
+            
+            fnRenderCitationList();
+            
+            document.getElementById('fn-editor-num').textContent = `Note ${noteId}`;
+            document.getElementById('fn-editor-position').textContent = `${idx + 1} of ${currentCitations.length}`;
+            
+            document.getElementById('fn-original-text').textContent = cite.text || cite.original || '';
+            document.getElementById('fn-final-textarea').value = cite.formatted || '';
+            
+            document.getElementById('fn-btn-prev').disabled = idx <= 0;
+            document.getElementById('fn-btn-next').disabled = idx >= currentCitations.length - 1;
+            
+            fnSearchAlternatives();
+        }
+        
+        async function fnSearchAlternatives() {
+            const container = document.getElementById('fn-alternatives-list');
+            container.innerHTML = `
+                <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                    <div class="loader" style="margin: 0 auto 12px;"></div>
+                    <p>Searching databases...</p>
+                </div>
+            `;
+            
+            const query = document.getElementById('fn-original-text').textContent;
+            if (!query) return;
+            
+            try {
+                const res = await fetch('/api/cite/multiple', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, style: currentStyle, limit: 5 })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success && data.results?.length > 0) {
+                    window.fnAlternatives = data.results;
+                    
+                    container.innerHTML = data.results.map((r, i) => `
+                        <div class="alternative-card" onclick="fnSelectAlternative(${i})">
+                            <p style="font-size: 0.9rem; color: #374151;">${escapeHtml(r.citation)}</p>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="alternative-card" style="text-align: center; color: #9ca3af;">
+                            <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
+                            <p>No alternatives found</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                container.innerHTML = `
+                    <div class="alternative-card" style="text-align: center; color: #ef4444;">
+                        <i class="fas fa-exclamation-circle" style="font-size: 1.5rem; margin-bottom: 8px;"></i>
+                        <p>Search failed</p>
+                    </div>
+                `;
+            }
+        }
+        
+        function fnSelectAlternative(idx) {
+            if (window.fnAlternatives?.[idx]) {
+                document.getElementById('fn-final-textarea').value = window.fnAlternatives[idx].citation;
+                fnSelectedOptionIndex = idx;  // Track selection for metadata preservation
+            }
+        }
+        
+        async function fnCommitChange(silent = false) {
+            if (fnActiveIndex < 0 || !currentSessionId) return;
+            if (fnSaveInProgress) return;
+            
+            fnSaveInProgress = true;
+            
+            const cite = currentCitations[fnActiveIndex];
+            const noteId = cite.id || fnActiveIndex + 1;
+            const newText = document.getElementById('fn-final-textarea').value;
+            
+            const btn = document.getElementById('fn-commit-btn');
+            const originalHtml = btn.innerHTML;
+            
+            if (!silent) {
+                btn.innerHTML = '<div class="loader" style="border-top-color: white;"></div>';
+                btn.disabled = true;
+            }
+            
+            try {
+                let res;
+                
+                // If user selected an alternative, use accept-reference to preserve metadata
+                if (fnSelectedOptionIndex !== null && window.fnAlternatives?.[fnSelectedOptionIndex]) {
+                    const selectedAlt = window.fnAlternatives[fnSelectedOptionIndex];
+                    res = await fetch('/api/accept-reference', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: currentSessionId,
+                            citation_id: noteId,
+                            selected_option: fnSelectedOptionIndex,
+                            // Pass full metadata for backend to store
+                            option: {
+                                formatted: selectedAlt.citation,
+                                title: selectedAlt.metadata?.title || '',
+                                authors: selectedAlt.metadata?.authors || [],
+                                year: selectedAlt.metadata?.year || '',
+                                journal: selectedAlt.metadata?.journal || '',
+                                publisher: selectedAlt.metadata?.publisher || '',
+                                volume: selectedAlt.metadata?.volume || '',
+                                issue: selectedAlt.metadata?.issue || '',
+                                pages: selectedAlt.metadata?.pages || '',
+                                doi: selectedAlt.metadata?.doi || '',
+                                url: selectedAlt.metadata?.url || '',
+                                citation_type: selectedAlt.type || 'unknown',
+                                source: selectedAlt.source || '',
+                                case_name: selectedAlt.metadata?.case_name || '',
+                                citation: selectedAlt.metadata?.citation || '',
+                                court: selectedAlt.metadata?.court || ''
+                            }
+                        })
+                    });
+                } else {
+                    // Manual edit - use legacy update endpoint
+                    res = await fetch('/api/update', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: currentSessionId, note_id: noteId, html: newText })
+                    });
+                }
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    currentCitations[fnActiveIndex].formatted = newText;
+                    if (!currentCitations[fnActiveIndex].success) fnSuccessCount++;
+                    currentCitations[fnActiveIndex].success = true;
+                    fnSelectedOptionIndex = null;  // Reset after successful save
+                    
+                    if (!silent) fnJustSaved = true;
+                    else fnSaveInProgress = false;
+                    
+                    fnRenderCitationList();
+                    fnUpdateProgressBadge();
+                    
+                    if (!silent) {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                        btn.classList.add('success');
+                        
+                        setTimeout(() => {
+                            btn.innerHTML = originalHtml;
+                            btn.classList.remove('success');
+                            btn.disabled = false;
+                            fnSaveInProgress = false;
+                            
+                            if (fnActiveIndex < currentCitations.length - 1) {
+                                fnNavigate(1);
+                            } else if (currentCitations.every(c => c.success)) {
+                                showFnSuccess();
+                            }
+                        }, 800);
+                    }
+                } else {
+                    if (!silent) {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        alert('Failed to save');
+                    }
+                    fnSaveInProgress = false;
+                }
+            } catch (err) {
+                fnSaveInProgress = false;
+                if (!silent) {
+                    btn.innerHTML = originalHtml;
+                    btn.disabled = false;
+                    alert('Failed to save');
+                }
+            }
+        }
+        
+        async function fnNavigate(delta) {
+            if (fnJustSaved) {
+                fnJustSaved = false;
+            } else {
+                const textarea = document.getElementById('fn-final-textarea');
+                if (fnActiveIndex >= 0 && textarea?.value.trim()) {
+                    await fnCommitChange(true);
+                }
+            }
+            
+            const newIdx = fnActiveIndex + delta;
+            if (newIdx >= 0 && newIdx < currentCitations.length) {
+                fnLoadEditor(newIdx);
+            }
+        }
+        
+        function fnCopyToClipboard() {
+            navigator.clipboard.writeText(document.getElementById('fn-final-textarea').value);
+        }
+        
+        function fnAppendMode() {
+            const textarea = document.getElementById('fn-final-textarea');
+            textarea.value = textarea.value.trim() + '; ';
+            textarea.focus();
+        }
+        
+        function fnUpdateProgressBadge() {
+            const accepted = currentCitations.filter(c => c.success).length;
+            document.getElementById('header-progress-text').textContent = `${accepted}/${currentCitations.length} reviewed`;
+        }
+        
+        function showFnSuccess() {
+            document.getElementById('panel-footnote-editor').style.display = 'none';
+            document.getElementById('panel-success').classList.add('active');
+            document.getElementById('final-total').textContent = currentCitations.length;
+            document.getElementById('final-accepted').textContent = fnSuccessCount;
+        }
+        
+        // ========== SHARED FUNCTIONS ==========
+        function updateAcceptedCount() {
+            const accepted = currentCitations.filter(c => c.accepted).length;
+            const el = document.getElementById('accepted-count');
+            if (accepted > 0) {
+                el.textContent = `${accepted} accepted`;
+                el.style.display = 'inline';
+            } else {
+                el.style.display = 'none';
+            }
+        }
+        
+        function updateProgressBadge() {
+            const accepted = currentCitations.filter(c => c.accepted).length;
+            document.getElementById('header-progress-text').textContent = `${accepted}/${currentCitations.length} reviewed`;
+        }
+        
+        function showSuccessPanel() {
+            document.getElementById('panel-editor').style.display = 'none';
+            document.getElementById('panel-success').classList.add('active');
+            document.getElementById('download-area').classList.add('show');
+            
+            const changed = currentCitations.filter(c => c.accepted && c.formatted && c.formatted !== c.original).length;
+            document.getElementById('final-total').textContent = currentCitations.length;
+            document.getElementById('final-accepted').textContent = changed;
+        }
+        
+        function backToReview() {
+            document.getElementById('panel-success').classList.remove('active');
+            if (outputType === 'author-date') {
+                document.getElementById('panel-editor').style.display = 'flex';
+                selectCitation(0);
+            } else {
+                document.getElementById('panel-footnote-editor').style.display = 'flex';
+                fnLoadEditor(0);
+            }
+        }
+        
+        async function downloadDocument() {
+            if (!currentSessionId) return alert('No document to download');
+            
+            // Check if user is logged in
+            if (!currentUser) {
+                showAuthModal('login');
+                showNotification('Please log in to download your document', 'info');
+                return;
+            }
+            
+            // Check if user has credits
+            if (currentUser.credits < 1) {
+                showBuyCreditsModal();
+                showNotification('You need credits to download. Purchase credits to continue.', 'warning');
+                return;
+            }
+            
+            try {
+                if (outputType === 'author-date') {
+                    const res = await fetch('/api/finalize-author-date', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: currentSessionId, references: [] })
+                    });
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error || 'Finalize failed');
+                }
+                
+                const response = await fetch(`/api/download/${currentSessionId}`);
+                
+                // Handle auth errors
+                if (response.status === 401) {
+                    const data = await response.json();
+                    showAuthModal('login');
+                    showNotification(data.error || 'Please log in to download', 'warning');
+                    return;
+                }
+                
+                // Handle insufficient credits
+                if (response.status === 402) {
+                    const data = await response.json();
+                    showBuyCreditsModal();
+                    showNotification(data.error || 'You need credits to download', 'warning');
+                    // Update local credit count
+                    if (currentUser && data.balance !== undefined) {
+                        currentUser.credits = data.balance;
+                        updateUserBar();
+                    }
+                    return;
+                }
+                
+                if (!response.ok) throw new Error('Download failed');
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'citategenie_processed.docx';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+                
+                // Refresh user data to update credit count
+                await initAuth();
+                showNotification('Document downloaded! 1 credit used.', 'success');
+                
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        async function exportMetadataCSV() {
+            if (!currentSessionId) return alert('No document to export');
+            
+            try {
+                const response = await fetch(`/api/export-metadata/${currentSessionId}`);
+                if (!response.ok) throw new Error('Export failed');
+                
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'citategenie_citations.csv';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        function resetDocument() {
+            currentSessionId = null;
+            currentCitations = [];
+            activeCitationIndex = -1;
+            fnActiveIndex = -1;
+            fnSuccessCount = 0;
+            fnJustSaved = false;
+            fnSaveInProgress = false;
+            adSaveInProgress = false;
+            
+            // Reset landing page
+            document.getElementById('file-input').value = '';
+            document.getElementById('file-selected').classList.remove('show');
+            document.getElementById('drop-zone').style.display = 'block';
+            document.getElementById('process-btn').disabled = true;
+            document.getElementById('progress-container').classList.remove('active');
+            
+            // Switch views
+            document.getElementById('landing-page').classList.remove('hidden');
+            document.getElementById('workbench').classList.remove('active');
+            
+            // Reset workbench
+            document.getElementById('panel-empty').style.display = 'flex';
+            document.getElementById('panel-editor').style.display = 'none';
+            document.getElementById('panel-footnote-editor').style.display = 'none';
+            document.getElementById('panel-success').classList.remove('active');
+            document.getElementById('download-area').classList.remove('show');
+            document.getElementById('accepted-count').style.display = 'none';
+            
+            document.getElementById('citation-list').innerHTML = `
+                <div class="citation-list-empty">
+                    <i class="fas fa-inbox"></i>
+                    <p>Citations will appear here</p>
+                </div>
+            `;
+        }
+        
+        // ========== OVERLAY ==========
+        function showProcessingOverlay() {
+            document.getElementById('processing-overlay').classList.add('active');
+        }
+        
+        function hideProcessingOverlay() {
+            document.getElementById('processing-overlay').classList.remove('active');
+        }
+        
+        function updateProcessingStatus(message, progress) {
+            document.getElementById('processing-step').textContent = message;
+            document.getElementById('processing-progress').style.width = `${progress}%`;
+        }
+        
+        // ========== UTILITIES ==========
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // =============================================================================
+        // BILLING SYSTEM JAVASCRIPT
+        // =============================================================================
+
+        // ========== AUTH STATE ==========
+        let currentUser = null;
+        let isPreviewMode = false;
+
+        // ========== INITIALIZATION ==========
+        async function initAuth() {
+            try {
+                const response = await fetch('/billing/me');
+                const data = await response.json();
+                
+                if (data.authenticated) {
+                    currentUser = data.user;
+                    isPreviewMode = false;
+                    updateUserBar();
+                } else {
+                    currentUser = null;
+                    isPreviewMode = true;
+                    updateUserBar();
+                }
+                
+                // Show user bar
+                document.getElementById('user-bar').classList.remove('hidden');
+                
+                // Check for payment redirect
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('payment') === 'success') {
+                    showNotification('Payment successful! Credits have been added.', 'success');
+                    // Refresh user data
+                    setTimeout(initAuth, 500);
+                    // Clean URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } else if (urlParams.get('payment') === 'cancelled') {
+                    showNotification('Payment cancelled.', 'info');
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }
+                
+            } catch (error) {
+                console.error('Auth init error:', error);
+            }
+        }
+
+        function updateUserBar() {
+            const loggedOut = document.getElementById('user-info-logged-out');
+            const loggedIn = document.getElementById('user-info-logged-in');
+            
+            if (currentUser) {
+                loggedOut.style.display = 'none';
+                loggedIn.style.display = 'flex';
+                loggedIn.style.alignItems = 'center';
+                loggedIn.style.gap = '16px';
+                
+                document.getElementById('user-email-display').textContent = currentUser.email;
+                document.getElementById('credit-count').textContent = currentUser.credits;
+            } else {
+                loggedOut.style.display = 'flex';
+                loggedIn.style.display = 'none';
+            }
+        }
+
+        // ========== AUTH MODAL ==========
+        function showAuthModal(tab = 'login') {
+            document.getElementById('auth-modal').classList.add('active');
+            switchAuthTab(tab);
+            document.getElementById('auth-error').classList.remove('show');
+        }
+
+        function hideAuthModal() {
+            document.getElementById('auth-modal').classList.remove('active');
+        }
+
+        function switchAuthTab(tab) {
+            // Update tabs
+            document.querySelectorAll('.auth-tab').forEach((t, i) => {
+                t.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'register' && i === 1));
+            });
+            
+            // Update forms
+            document.getElementById('login-form').classList.toggle('active', tab === 'login');
+            document.getElementById('register-form').classList.toggle('active', tab === 'register');
+            
+            // Update title
+            document.getElementById('auth-modal-title').textContent = 
+                tab === 'login' ? 'Welcome Back' : 'Create Your Account';
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            const submitBtn = document.getElementById('login-submit');
+            const errorDiv = document.getElementById('auth-error');
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Logging in...';
+            errorDiv.classList.remove('show');
+            
+            try {
+                const response = await fetch('/billing/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, remember: true })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentUser = data.user;
+                    isPreviewMode = false;
+                    updateUserBar();
+                    hideAuthModal();
+                    hidePreviewBanner();
+                    showNotification(`Welcome back, ${currentUser.name || currentUser.email}!`, 'success');
+                } else {
+                    errorDiv.textContent = data.error || 'Login failed';
+                    errorDiv.classList.add('show');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Connection error. Please try again.';
+                errorDiv.classList.add('show');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-sign-in-alt"></i> Log In';
+            }
+        }
+
+        async function handleRegister(event) {
+            event.preventDefault();
+            
+            const name = document.getElementById('register-name').value;
+            const email = document.getElementById('register-email').value;
+            const password = document.getElementById('register-password').value;
+            const submitBtn = document.getElementById('register-submit');
+            const errorDiv = document.getElementById('auth-error');
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating account...';
+            errorDiv.classList.remove('show');
+            
+            try {
+                const response = await fetch('/billing/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, name })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentUser = data.user;
+                    isPreviewMode = false;
+                    updateUserBar();
+                    hideAuthModal();
+                    hidePreviewBanner();
+                    showNotification(`Welcome! You have ${currentUser.credits} free credits.`, 'success');
+                } else {
+                    errorDiv.textContent = data.error || 'Registration failed';
+                    errorDiv.classList.add('show');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Connection error. Please try again.';
+                errorDiv.classList.add('show');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-user-plus"></i> Create Account';
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('/billing/logout', { method: 'POST' });
+                currentUser = null;
+                isPreviewMode = true;
+                updateUserBar();
+                showNotification('Logged out successfully', 'info');
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+        }
+
+        // ========== BUY CREDITS MODAL ==========
+        let selectedProduct = null;
+        let products = [];
+
+        async function showBuyCreditsModal() {
+            document.getElementById('credits-modal').classList.add('active');
+            await loadProducts();
+        }
+
+        function hideBuyCreditsModal() {
+            document.getElementById('credits-modal').classList.remove('active');
+            selectedProduct = null;
+        }
+
+        async function loadProducts() {
+            const container = document.getElementById('products-container');
+            container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Loading...</p>';
+            
+            try {
+                const response = await fetch('/billing/products');
+                const data = await response.json();
+                products = data.products;
+                
+                container.innerHTML = products.map(p => `
+                    <div class="product-card" onclick="selectProduct('${p.code}')" id="product-${p.code}">
+                        ${p.badge ? `<span class="product-badge">${p.badge}</span>` : ''}
+                        <div class="product-name">${p.name}</div>
+                        <div class="product-credits">${p.credits} document${p.credits > 1 ? 's' : ''}</div>
+                        <div class="product-price">$${p.price.toFixed(2)}</div>
+                        ${p.savings_percent > 0 ? `<div class="product-per-credit">$${p.price_per_credit.toFixed(2)}/doc · Save ${p.savings_percent}%</div>` : ''}
+                    </div>
+                `).join('');
+            } catch (error) {
+                container.innerHTML = '<p style="color: #c00;">Failed to load products</p>';
+            }
+        }
+
+        function selectProduct(code) {
+            selectedProduct = code;
+            
+            // Update visual selection
+            document.querySelectorAll('.product-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.getElementById(`product-${code}`).classList.add('selected');
+            
+            // Enable checkout button
+            document.getElementById('checkout-btn').disabled = false;
+        }
+
+        async function startCheckout() {
+            if (!selectedProduct) return;
+            if (!currentUser) {
+                hideBuyCreditsModal();
+                showAuthModal('register');
+                return;
+            }
+            
+            const btn = document.getElementById('checkout-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Redirecting...';
+            
+            try {
+                const response = await fetch('/billing/checkout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ product_code: selectedProduct })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.checkout_url) {
+                    window.location.href = data.checkout_url;
+                } else {
+                    showNotification(data.error || 'Checkout failed', 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-credit-card"></i> Continue to Payment';
+                }
+            } catch (error) {
+                showNotification('Connection error', 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-credit-card"></i> Continue to Payment';
+            }
+        }
+
+        // ========== PREVIEW MODE HANDLING ==========
+        function showPreviewBanner(remaining) {
+            // Create preview banner if it doesn't exist in workbench
+            let banner = document.getElementById('preview-banner');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'preview-banner';
+                banner.className = 'preview-banner';
+                banner.innerHTML = `
+                    <i class="fas fa-eye"></i>
+                    <div class="preview-banner-text">
+                        <strong>Preview Mode</strong><br>
+                        <span id="preview-message">Log in or sign up to download your formatted document.</span>
+                    </div>
+                    <button class="preview-banner-btn" onclick="showAuthModal('register')">
+                        Sign Up Free
+                    </button>
+                `;
+                // Insert at top of workbench sidebar
+                const sidebar = document.querySelector('.workbench-sidebar');
+                if (sidebar) {
+                    sidebar.insertBefore(banner, sidebar.firstChild);
+                }
+            }
+            
+            const message = document.getElementById('preview-message');
+            if (message && remaining !== null && remaining !== undefined) {
+                message.innerHTML = `You have <strong>${remaining}</strong> free preview${remaining !== 1 ? 's' : ''} remaining. Log in to download.`;
+            }
+            
+            banner.classList.remove('hidden');
+        }
+
+        function hidePreviewBanner() {
+            const banner = document.getElementById('preview-banner');
+            if (banner) banner.classList.add('hidden');
+        }
+
+        // ========== NOTIFICATION HELPER ==========
+        function showNotification(message, type = 'info') {
+            const colors = {
+                success: '#27ae60',
+                error: '#e74c3c',
+                info: '#3498db',
+                warning: '#f39c12'
+            };
+            
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: ${colors[type]};
+                color: white;
+                padding: 16px 24px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                z-index: 10001;
+                animation: slideInRight 0.3s ease;
+                max-width: 350px;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'fadeOutRight 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // ========== INITIALIZE ON PAGE LOAD ==========
+        document.addEventListener('DOMContentLoaded', initAuth);
+    </script>
+</body>
+</html>
