@@ -3050,7 +3050,7 @@
             if (!currentSessionId) return alert('No document to export');
             
             try {
-                const response = await fetch(`/api/export-metadata/${currentSessionId}`);
+                const response = await fetch(`/api/export-components/${currentSessionId}`);
                 if (!response.ok) throw new Error('Export failed');
                 
                 const blob = await response.blob();
