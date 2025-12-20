@@ -1,104 +1,39 @@
 """
 citeflex/cost_tracker.py
 
-Lightweight API cost logging for CitateGenie.
+Database-backed API cost tracking for CitateGenie.
 
-Logs every paid API call (Gemini, OpenAI, Claude, SerpAPI) to a CSV file
-for cost analysis. Open in Excel to analyze costs per citation/document.
+Logs every paid API call to PostgreSQL for analytics and cost analysis.
+Replaces the previous CSV-based tracking with persistent database storage.
 
 Usage:
-    from cost_tracker import log_api_call
+    from cost_tracker import log_api_call, start_document_tracking, finish_document_tracking
     
-    # After an OpenAI call:
-    log_api_call('openai', input_tokens=847, output_tokens=312, query='Simonton, 1992')
+    # Start tracking a document
+    start_document_tracking(session_id='abc123', filename='paper.docx')
     
-    # After a SerpAPI call:
-    log_api_call('serpapi', query='creativity psychology')
-
-Output: costs.csv in the application root directory
+    # Log API calls during processing
+    log_api_call('openai', input_tokens=847, output_tokens=312, 
+                 query='Simonton, 1992', function='classify',
+                 source_type='parenthetical', citation_type='journal')
+    
+    # Finish tracking
+    summary = finish_document_tracking(citations_resolved=5, citations_failed=1)
 
 Version History:
+    2025-12-20 V2.0: Database-backed tracking (replaces CSV)
     2025-12-14 V1.1: Added EMAIL_AFTER_EVERY_CALL for test mode auto-emails
     2025-12-13 V1.0: Initial implementation - CSV logging with cost calculation
 """
 
 import os
-import csv
 from datetime import datetime
-from pathlib import Path
+from typing import Optional, Dict, Any
+from contextlib import contextmanager
+import threading
 
-# =============================================================================
-# EMAIL CONFIGURATION
-# =============================================================================
-# Set to True to send email after each document is processed
-# Set to False to disable auto-emails
-EMAIL_AFTER_DOCUMENT = os.environ.get('EMAIL_AFTER_DOCUMENT', 'true').lower() == 'true'
-
-# =============================================================================
-# PER-DOCUMENT COST TRACKING
-# =============================================================================
-# Track costs for the current document being processed
-_current_document_cost = 0.0
-_current_document_calls = 0
-_current_document_name = ""
-
-
-def start_document_tracking(document_name: str = ""):
-    """
-    Reset cost tracking for a new document.
-    Call this at the start of document processing.
-    """
-    global _current_document_cost, _current_document_calls, _current_document_name
-    _current_document_cost = 0.0
-    _current_document_calls = 0
-    _current_document_name = document_name
-    print(f"[CostTracker] Started tracking costs for: {document_name or 'document'}")
-
-
-def get_document_cost() -> dict:
-    """
-    Get the cost for the current document.
-    """
-    return {
-        'cost': _current_document_cost,
-        'calls': _current_document_calls,
-        'document': _current_document_name,
-    }
-
-
-def finish_document_tracking() -> dict:
-    """
-    Finish tracking and optionally send email.
-    Call this at the end of document processing.
-    
-    Returns:
-        Dict with document cost summary
-    """
-    global _current_document_cost, _current_document_calls, _current_document_name
-    
-    summary = {
-        'cost': _current_document_cost,
-        'calls': _current_document_calls,
-        'document': _current_document_name,
-    }
-    
-    print(f"[CostTracker] Document '{_current_document_name}' complete: {_current_document_calls} API calls, ${_current_document_cost:.4f}")
-    
-    # Send email if enabled
-    if EMAIL_AFTER_DOCUMENT and _current_document_calls > 0:
-        try:
-            from email_service import send_document_cost_report
-            send_document_cost_report(summary)
-            print(f"[CostTracker] Document cost email sent")
-        except Exception as e:
-            print(f"[CostTracker] Document cost email failed: {e}")
-    
-    # Reset for next document
-    _current_document_cost = 0.0
-    _current_document_calls = 0
-    _current_document_name = ""
-    
-    return summary
+# Thread-local storage for per-document tracking
+_thread_local = threading.local()
 
 
 # =============================================================================
@@ -122,31 +57,6 @@ PRICING = {
         'per_search': 0.01,  # ~$0.01 per search (varies by plan)
     },
 }
-
-# =============================================================================
-# CSV FILE SETUP
-# =============================================================================
-
-# Store costs.csv in the app root directory
-COST_LOG_PATH = Path(__file__).parent / 'costs.csv'
-
-CSV_HEADERS = [
-    'timestamp',
-    'provider',
-    'input_tokens',
-    'output_tokens',
-    'cost_usd',
-    'query',
-    'function',
-]
-
-def _ensure_csv_exists():
-    """Create CSV file with headers if it doesn't exist."""
-    if not COST_LOG_PATH.exists():
-        with open(COST_LOG_PATH, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(CSV_HEADERS)
-        print(f"[CostTracker] Created cost log: {COST_LOG_PATH}")
 
 
 # =============================================================================
@@ -183,7 +93,190 @@ def calculate_cost(provider: str, input_tokens: int = 0, output_tokens: int = 0)
 
 
 # =============================================================================
-# LOGGING FUNCTION
+# PER-DOCUMENT TRACKING
+# =============================================================================
+
+def _get_current_tracking() -> Dict[str, Any]:
+    """Get current document tracking state (thread-safe)."""
+    if not hasattr(_thread_local, 'tracking'):
+        _thread_local.tracking = {
+            'active': False,
+            'session_id': None,
+            'db_session_id': None,
+            'filename': None,
+            'user_id': None,
+            'style': None,
+            'mode': None,
+            'is_preview': False,
+            'cost': 0.0,
+            'calls': 0,
+            'started_at': None,
+        }
+    return _thread_local.tracking
+
+
+def start_document_tracking(
+    session_id: str,
+    filename: str = "",
+    user_id: Optional[int] = None,
+    style: Optional[str] = None,
+    mode: Optional[str] = None,
+    is_preview: bool = False
+) -> Optional[int]:
+    """
+    Start tracking costs for a new document.
+    
+    Creates a DocumentSession record in the database.
+    
+    Args:
+        session_id: Your application's session ID
+        filename: Document filename
+        user_id: User ID (None for anonymous)
+        style: Citation style (chicago, apa, etc.)
+        mode: Processing mode (footnote, author-date, unified)
+        is_preview: Whether this is a preview (free) processing
+    
+    Returns:
+        Database session ID (for linking API calls)
+    """
+    tracking = _get_current_tracking()
+    
+    # Reset tracking state
+    tracking['active'] = True
+    tracking['session_id'] = session_id
+    tracking['filename'] = filename
+    tracking['user_id'] = user_id
+    tracking['style'] = style
+    tracking['mode'] = mode
+    tracking['is_preview'] = is_preview
+    tracking['cost'] = 0.0
+    tracking['calls'] = 0
+    tracking['started_at'] = datetime.utcnow()
+    tracking['db_session_id'] = None
+    
+    # Create database record
+    try:
+        from billing.db import get_db
+        from billing.admin_models import DocumentSession
+        
+        db = get_db()
+        
+        doc_session = DocumentSession(
+            session_id=session_id,
+            user_id=user_id,
+            filename=filename,
+            citation_style=style,
+            processing_mode=mode,
+            is_preview=is_preview,
+            status='processing'
+        )
+        db.add(doc_session)
+        db.commit()
+        
+        tracking['db_session_id'] = doc_session.id
+        print(f"[CostTracker] Started tracking: {filename or session_id[:8]} (db_id={doc_session.id})")
+        return doc_session.id
+        
+    except Exception as e:
+        print(f"[CostTracker] Warning: Could not create DB session: {e}")
+        print(f"[CostTracker] Continuing with in-memory tracking only")
+        return None
+
+
+def get_document_cost() -> Dict[str, Any]:
+    """Get current document's cost summary."""
+    tracking = _get_current_tracking()
+    return {
+        'cost': tracking['cost'],
+        'calls': tracking['calls'],
+        'document': tracking['filename'],
+        'session_id': tracking['session_id'],
+    }
+
+
+def finish_document_tracking(
+    citations_found: int = 0,
+    citations_resolved: int = 0,
+    citations_failed: int = 0,
+    status: str = 'completed',
+    error_message: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Finish tracking and update database record.
+    
+    Args:
+        citations_found: Total citations found in document
+        citations_resolved: Successfully resolved citations
+        citations_failed: Failed to resolve
+        status: Final status ('completed', 'failed')
+        error_message: Error details if failed
+    
+    Returns:
+        Summary dict with cost, calls, document info
+    """
+    tracking = _get_current_tracking()
+    
+    if not tracking['active']:
+        return {'cost': 0, 'calls': 0, 'document': ''}
+    
+    # Calculate processing time
+    processing_time_ms = None
+    if tracking['started_at']:
+        delta = datetime.utcnow() - tracking['started_at']
+        processing_time_ms = int(delta.total_seconds() * 1000)
+    
+    summary = {
+        'cost': tracking['cost'],
+        'calls': tracking['calls'],
+        'document': tracking['filename'],
+        'session_id': tracking['session_id'],
+        'processing_time_ms': processing_time_ms,
+        'citations_found': citations_found,
+        'citations_resolved': citations_resolved,
+        'citations_failed': citations_failed,
+    }
+    
+    # Update database record
+    if tracking['db_session_id']:
+        try:
+            from billing.db import get_db
+            from billing.admin_models import DocumentSession
+            
+            db = get_db()
+            doc_session = db.query(DocumentSession).get(tracking['db_session_id'])
+            
+            if doc_session:
+                doc_session.total_citations_found = citations_found
+                doc_session.citations_resolved = citations_resolved
+                doc_session.citations_failed = citations_failed
+                doc_session.total_cost_usd = tracking['cost']
+                doc_session.total_api_calls = tracking['calls']
+                doc_session.completed_at = datetime.utcnow()
+                doc_session.processing_time_ms = processing_time_ms
+                doc_session.status = status
+                doc_session.error_message = error_message
+                db.commit()
+                
+        except Exception as e:
+            print(f"[CostTracker] Warning: Could not update DB session: {e}")
+    
+    print(f"[CostTracker] Document '{tracking['filename']}' complete: "
+          f"{tracking['calls']} API calls, ${tracking['cost']:.4f}")
+    
+    # Reset tracking state
+    tracking['active'] = False
+    tracking['session_id'] = None
+    tracking['db_session_id'] = None
+    tracking['filename'] = None
+    tracking['cost'] = 0.0
+    tracking['calls'] = 0
+    tracking['started_at'] = None
+    
+    return summary
+
+
+# =============================================================================
+# API CALL LOGGING
 # =============================================================================
 
 def log_api_call(
@@ -191,112 +284,232 @@ def log_api_call(
     input_tokens: int = 0,
     output_tokens: int = 0,
     query: str = '',
-    function: str = ''
+    function: str = '',
+    source_type: Optional[str] = None,
+    citation_type: Optional[str] = None,
+    success: bool = True,
+    confidence: Optional[float] = None,
+    latency_ms: Optional[int] = None,
+    error_message: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> float:
     """
-    Log an API call to costs.csv and return the calculated cost.
+    Log an API call to the database and return the calculated cost.
     
     Args:
-        provider: 'gemini', 'openai', 'claude', or 'serpapi'
-        input_tokens: Number of input tokens (0 for SerpAPI)
-        output_tokens: Number of output tokens (0 for SerpAPI)
-        query: The citation/search query being processed
+        provider: 'gemini', 'openai', 'claude', 'serpapi', 'crossref', etc.
+        input_tokens: Number of input tokens (0 for non-AI APIs)
+        output_tokens: Number of output tokens (0 for non-AI APIs)
+        query: The citation/search query being processed (truncated to 500 chars)
         function: Which function made the call (e.g., 'classify', 'lookup')
+        source_type: Type of source being resolved (url, doi, parenthetical, etc.)
+        citation_type: Type of citation (journal, book, legal, etc.)
+        success: Whether the call was successful
+        confidence: Confidence score (0.0-1.0) for the result
+        latency_ms: Response time in milliseconds
+        error_message: Error details if failed
+        metadata: Additional metadata to store as JSON
         
     Returns:
         Cost in USD for this call
     """
-    _ensure_csv_exists()
-    
     cost = calculate_cost(provider, input_tokens, output_tokens)
     
-    # Clean query for CSV (remove newlines, limit length)
-    clean_query = query.replace('\n', ' ').replace('\r', '')[:200]
+    # Clean query for storage
+    clean_query = query.replace('\n', ' ').replace('\r', '')[:500] if query else ''
     
-    row = [
-        datetime.now().isoformat(),
-        provider.lower(),
-        input_tokens,
-        output_tokens,
-        f'{cost:.8f}',  # Keep precision
-        clean_query,
-        function,
-    ]
-    
-    try:
-        with open(COST_LOG_PATH, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(row)
-    except Exception as e:
-        print(f"[CostTracker] Warning: Could not write to log: {e}")
-    
-    # Also print for visibility during development
-    if provider == 'serpapi':
-        print(f"[CostTracker] {provider}: 1 search = ${cost:.4f}")
-    else:
+    # Print for visibility
+    if provider.lower() in ['openai', 'claude', 'gemini']:
         print(f"[CostTracker] {provider}: {input_tokens} in + {output_tokens} out = ${cost:.6f}")
+    elif provider.lower() == 'serpapi':
+        print(f"[CostTracker] {provider}: 1 search = ${cost:.4f}")
+    elif cost > 0:
+        print(f"[CostTracker] {provider}: ${cost:.6f}")
     
-    # ==========================================================================
-    # Accumulate cost for current document
-    # ==========================================================================
-    global _current_document_cost, _current_document_calls
-    _current_document_cost += cost
-    _current_document_calls += 1
+    # Update in-memory tracking
+    tracking = _get_current_tracking()
+    if tracking['active']:
+        tracking['cost'] += cost
+        tracking['calls'] += 1
+    
+    # Write to database
+    try:
+        from billing.db import get_db
+        from billing.admin_models import APICall
+        
+        db = get_db()
+        
+        api_call = APICall(
+            document_session_id=tracking.get('db_session_id'),
+            provider=provider.lower(),
+            endpoint=function,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost,
+            source_type=source_type,
+            citation_type=citation_type,
+            raw_query=clean_query,
+            success=success,
+            confidence=confidence,
+            latency_ms=latency_ms,
+            error_message=error_message,
+            metadata_json=metadata or {}
+        )
+        db.add(api_call)
+        db.commit()
+        
+    except Exception as e:
+        print(f"[CostTracker] Warning: Could not write to DB: {e}")
     
     return cost
 
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# ANALYTICS QUERIES
 # =============================================================================
 
-def get_total_cost() -> dict:
+def get_total_cost(days: int = 30) -> Dict[str, Any]:
     """
-    Read costs.csv and return summary statistics.
+    Get total cost summary for the specified number of days.
+    
+    Args:
+        days: Number of days to include (default 30)
     
     Returns:
         Dict with total_cost, by_provider breakdown, and call_count
     """
-    if not COST_LOG_PATH.exists():
-        return {'total_cost': 0, 'by_provider': {}, 'call_count': 0}
-    
-    totals = {
-        'gemini': 0.0,
-        'openai': 0.0,
-        'claude': 0.0,
-        'serpapi': 0.0,
-    }
-    call_count = 0
-    
-    with open(COST_LOG_PATH, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            provider = row.get('provider', '').lower()
-            cost = float(row.get('cost_usd', 0))
-            if provider in totals:
-                totals[provider] += cost
-            call_count += 1
-    
-    return {
-        'total_cost': sum(totals.values()),
-        'by_provider': totals,
-        'call_count': call_count,
-    }
+    try:
+        from billing.db import get_db
+        from billing.admin_models import APICall
+        from sqlalchemy import func
+        from datetime import timedelta
+        
+        db = get_db()
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        # Total cost and calls
+        totals = db.query(
+            func.sum(APICall.cost_usd),
+            func.count(APICall.id)
+        ).filter(APICall.timestamp >= since).first()
+        
+        total_cost = totals[0] or 0.0
+        call_count = totals[1] or 0
+        
+        # By provider
+        by_provider = {}
+        provider_stats = db.query(
+            APICall.provider,
+            func.sum(APICall.cost_usd),
+            func.count(APICall.id)
+        ).filter(
+            APICall.timestamp >= since
+        ).group_by(APICall.provider).all()
+        
+        for provider, cost, count in provider_stats:
+            by_provider[provider] = {
+                'cost': cost or 0.0,
+                'calls': count or 0
+            }
+        
+        return {
+            'total_cost': total_cost,
+            'call_count': call_count,
+            'by_provider': by_provider,
+            'days': days
+        }
+        
+    except Exception as e:
+        print(f"[CostTracker] Error getting total cost: {e}")
+        return {
+            'total_cost': 0,
+            'call_count': 0,
+            'by_provider': {},
+            'days': days
+        }
 
 
-def print_summary():
+def get_success_rates(days: int = 30) -> Dict[str, float]:
+    """
+    Get success rates by source type.
+    
+    Args:
+        days: Number of days to include
+    
+    Returns:
+        Dict mapping source_type to success rate (0-100)
+    """
+    try:
+        from billing.db import get_db
+        from billing.admin_models import APICall
+        from sqlalchemy import func, case
+        from datetime import timedelta
+        
+        db = get_db()
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        rates = db.query(
+            APICall.source_type,
+            (func.count(case((APICall.success == True, 1))) * 100.0 / 
+             func.nullif(func.count(APICall.id), 0)).label('success_rate')
+        ).filter(
+            APICall.timestamp >= since,
+            APICall.source_type.isnot(None)
+        ).group_by(APICall.source_type).all()
+        
+        return {row[0]: round(row[1] or 0, 1) for row in rates}
+        
+    except Exception as e:
+        print(f"[CostTracker] Error getting success rates: {e}")
+        return {}
+
+
+def get_citation_type_distribution(days: int = 30) -> Dict[str, int]:
+    """
+    Get citation type distribution.
+    
+    Args:
+        days: Number of days to include
+    
+    Returns:
+        Dict mapping citation_type to count
+    """
+    try:
+        from billing.db import get_db
+        from billing.admin_models import APICall
+        from sqlalchemy import func
+        from datetime import timedelta
+        
+        db = get_db()
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        dist = db.query(
+            APICall.citation_type,
+            func.count(APICall.id)
+        ).filter(
+            APICall.timestamp >= since,
+            APICall.citation_type.isnot(None)
+        ).group_by(APICall.citation_type).all()
+        
+        return {row[0]: row[1] for row in dist}
+        
+    except Exception as e:
+        print(f"[CostTracker] Error getting citation distribution: {e}")
+        return {}
+
+
+def print_summary(days: int = 30):
     """Print a cost summary to console."""
-    stats = get_total_cost()
+    stats = get_total_cost(days)
     
     print("\n" + "="*50)
-    print("CITATEGENIE API COST SUMMARY")
+    print(f"CITATEGENIE API COST SUMMARY (Last {days} days)")
     print("="*50)
     print(f"Total API calls: {stats['call_count']}")
     print(f"Total cost: ${stats['total_cost']:.4f}")
     print("\nBy provider:")
-    for provider, cost in stats['by_provider'].items():
-        if cost > 0:
-            print(f"  {provider:10} ${cost:.4f}")
+    for provider, data in stats['by_provider'].items():
+        print(f"  {provider:12} ${data['cost']:.4f} ({data['calls']} calls)")
     print("="*50 + "\n")
 
 
@@ -307,15 +520,8 @@ def print_summary():
 if __name__ == "__main__":
     print("Testing cost tracker...")
     
-    # Simulate some API calls
-    log_api_call('gemini', input_tokens=500, output_tokens=200, 
-                 query='Simonton, 1992', function='classify')
-    log_api_call('openai', input_tokens=847, output_tokens=312, 
-                 query='Zimbardo, Johnson, & McCann, 2009', function='lookup')
-    log_api_call('serpapi', query='creativity psychology Simonton', 
-                 function='google_scholar')
-    log_api_call('claude', input_tokens=1000, output_tokens=500,
-                 query='caplan trains brains', function='lookup_fragment')
-    
-    print_summary()
-    print(f"\nLog file: {COST_LOG_PATH}")
+    # Test cost calculation
+    print(f"OpenAI 1000 in + 500 out = ${calculate_cost('openai', 1000, 500):.6f}")
+    print(f"Gemini 1000 in + 500 out = ${calculate_cost('gemini', 1000, 500):.6f}")
+    print(f"Claude 1000 in + 500 out = ${calculate_cost('claude', 1000, 500):.6f}")
+    print(f"SerpAPI search = ${calculate_cost('serpapi'):.6f}")

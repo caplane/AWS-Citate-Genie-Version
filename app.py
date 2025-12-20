@@ -57,7 +57,7 @@ from processors.document_components import export_cache_to_csv
 
 # Billing system imports
 from billing import (
-    init_billing, billing_bp, 
+    init_billing, billing_bp, admin_bp,
     requires_credits, spend_user_credit,
     get_balance_fast, has_credits
 )
@@ -76,6 +76,9 @@ init_billing(app)
 
 # Register billing routes (/billing/*)
 app.register_blueprint(billing_bp)
+
+# Register admin routes (/admin/*)
+app.register_blueprint(admin_bp)
 
 ALLOWED_EXTENSIONS = {'docx'}
 
