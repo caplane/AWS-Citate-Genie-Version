@@ -148,11 +148,12 @@ Resources:
   # SECRETS MANAGER - API Keys
   # ===========================================================================
   
+  # Primary AI Providers
   OpenAISecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'citategenie/${Environment}/openai-api-key'
-      Description: OpenAI API key for GPT-5.2
+      Name: !Sub 'citategenie/${Environment}/OPENAI_API_KEY'
+      Description: OpenAI API key for GPT-5.2 citation lookup
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -160,16 +161,63 @@ Resources:
   AnthropicSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'citategenie/${Environment}/anthropic-api-key'
-      Description: Anthropic API key for Opus 4.5
+      Name: !Sub 'citategenie/${Environment}/ANTHROPIC_API_KEY'
+      Description: Anthropic API key for Opus 4.5 gist extraction
       Tags:
         - Key: Environment
           Value: !Ref Environment
 
+  GeminiSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/GEMINI_API_KEY'
+      Description: Google Gemini API key (AI fallback)
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Citation Data Sources
+  SerpAPISecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/SERPAPI_KEY'
+      Description: SerpAPI key for Google Scholar searches
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  CourtListenerSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/CL_API_KEY'
+      Description: CourtListener API key for legal case lookup
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  PubMedSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/PUBMED_API_KEY'
+      Description: PubMed/NCBI API key for medical citations
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  GoogleBooksSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/GOOGLE_BOOKS_API_KEY'
+      Description: Google Books API key for book metadata
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Payments
   StripeSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub 'citategenie/${Environment}/stripe-api-key'
+      Name: !Sub 'citategenie/${Environment}/STRIPE_SECRET_KEY'
       Description: Stripe API key for payments
       Tags:
         - Key: Environment
@@ -413,8 +461,17 @@ Resources:
         Variables:
           DOCUMENT_BUCKET: !Ref DocumentBucket
           DB_SECRET_ARN: !Ref DBCredentialsSecret
+          # AI Providers
           OPENAI_SECRET_ARN: !Ref OpenAISecret
           ANTHROPIC_SECRET_ARN: !Ref AnthropicSecret
+          GEMINI_SECRET_ARN: !Ref GeminiSecret
+          # Citation Sources
+          SERPAPI_SECRET_ARN: !Ref SerpAPISecret
+          CL_SECRET_ARN: !Ref CourtListenerSecret
+          PUBMED_SECRET_ARN: !Ref PubMedSecret
+          GOOGLE_BOOKS_SECRET_ARN: !Ref GoogleBooksSecret
+          # Payments
+          STRIPE_SECRET_ARN: !Ref StripeSecret
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DocumentBucket
@@ -426,6 +483,12 @@ Resources:
               Resource:
                 - !Ref OpenAISecret
                 - !Ref AnthropicSecret
+                - !Ref GeminiSecret
+                - !Ref SerpAPISecret
+                - !Ref CourtListenerSecret
+                - !Ref PubMedSecret
+                - !Ref GoogleBooksSecret
+                - !Ref StripeSecret
                 - !Ref DBCredentialsSecret
             - Effect: Allow
               Action:
