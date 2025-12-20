@@ -270,16 +270,55 @@ def _legal_dict_to_components(data: dict, raw_source: str) -> Optional[SourceCom
 # WRAPPER: CONVERT BOOKS.PY DICT → SourceComponents
 # =============================================================================
 
+# Import comprehensive publisher places database
+try:
+    from engines.publisher_places import get_publisher_place as _get_publisher_place
+    PUBLISHER_PLACES_AVAILABLE = True
+except ImportError:
+    PUBLISHER_PLACES_AVAILABLE = False
+    def _get_publisher_place(publisher):
+        return None
+
+def _resolve_publication_place(publisher: str, api_place: str = '') -> str:
+    """
+    Resolve publication place with multiple fallback strategies.
+    
+    1. Use API-provided place if available
+    2. Try comprehensive publisher_places.py database (644 publishers)
+    3. Fall back to books.py resolve_place() 
+    
+    Args:
+        publisher: Publisher name from API
+        api_place: Place returned by API (may be empty)
+        
+    Returns:
+        Publication place string, or empty string if not found
+    """
+    # 1. API provided a place - use it
+    if api_place and api_place.strip():
+        return api_place.strip()
+    
+    if not publisher:
+        return ''
+    
+    # 2. Try comprehensive database first (better coverage)
+    if PUBLISHER_PLACES_AVAILABLE:
+        place = _get_publisher_place(publisher)
+        if place:
+            return place
+    
+    # 3. Fall back to books.py map
+    return books.resolve_place(publisher, '') or ''
+
 def _book_dict_to_components(data: dict, raw_source: str) -> Optional[SourceComponents]:
     """Convert books.py result dict to SourceComponents."""
     if not data:
         return None
     
-    # Get place, with fallback to publisher lookup if missing
-    place = data.get('place', '')
+    # Get place, with enhanced fallback resolution
     publisher = data.get('publisher', '')
-    if not place and publisher:
-        place = books.resolve_place(publisher, '')
+    api_place = data.get('place', '')
+    place = _resolve_publication_place(publisher, api_place)
     
     return SourceComponents(
         citation_type=CitationType.BOOK,
@@ -828,15 +867,17 @@ def _route_journal(query: str, gist: str = "") -> Optional[SourceComponents]:
         results.sort(key=lambda r: r.confidence, reverse=True)
         best = results[0]
         
-        # If high confidence (author is sole/first), return immediately
-        if best.confidence >= 0.7:
+        # If we have any result with confidence >= 0.5, use it (don't pay for SerpAPI)
+        if best.confidence >= 0.5:
             print(f"[UnifiedRouter] Found via {best.source_engine} (author-score: {best.confidence})")
             return best
         
-        print(f"[UnifiedRouter] Low author-score ({best.confidence}), escalating...")
+        print(f"[UnifiedRouter] Low author-score ({best.confidence}), but using free result anyway")
+        # Still return the best free result - don't escalate to paid API
+        return best
     
-    # Layer 4.5: Try Google Scholar (paid, better for fragments)
-    if GOOGLE_SCHOLAR_AVAILABLE:
+    # Layer 4.5: Try Google Scholar (paid) ONLY if free APIs returned NOTHING
+    if GOOGLE_SCHOLAR_AVAILABLE and len(results) == 0:
         try:
             gs_result = _google_scholar.search(query)
             if gs_result and gs_result.has_minimum_data():
@@ -1010,11 +1051,14 @@ def _route_url(url: str) -> Optional[SourceComponents]:
     is_pubmed_publisher = any(pub in url_lower for pub in PUBMED_INDEXED_PUBLISHERS)
     
     if is_pubmed_publisher:
-        # Try to extract PII from URL (e.g., PIIS0140-6736(51)91311-6)
-        pii_match = re.search(r'PII([A-Z0-9\-\(\)]+)', url, re.IGNORECASE)
+        # Try to extract PII from URL
+        # Format 1: PIIS0140-6736(51)91311-6 (Lancet - with PII prefix and parentheses)
+        # Format 2: S0092-8674(25)01138-9 (Cell - no PII prefix, with parentheses)
+        # Format 3: S0092867421003560 (ScienceDirect - no hyphens, no parentheses)
+        pii_match = re.search(r'(?:PII)?(S[0-9]{4}-?[0-9]{4}(?:\([0-9]+\))?[0-9A-Z\-]+)', url, re.IGNORECASE)
         if pii_match:
             pii = pii_match.group(1)
-            print(f"[UnifiedRouter] Extracted PII from Lancet/publisher URL: {pii}")
+            print(f"[UnifiedRouter] Extracted PII from publisher URL: {pii}")
             try:
                 # Search PubMed with the PII
                 result = _pubmed.search(pii)
@@ -1241,7 +1285,7 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
 # MULTIPLE RESULTS FUNCTION
 # =============================================================================
 
-def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -> List[Tuple[SourceComponents, str, str]]:
+def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, components_cache=None) -> List[Tuple[SourceComponents, str, str]]:
     """
     Get multiple citation candidates for user selection.
     
@@ -1249,6 +1293,9 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
     
     NEW (V3.4): If citation is already complete, returns parsed version first
     as "Original (Reformatted)" before database results.
+    
+    NEW (V4.2): Checks components_cache before API calls. If found, returns
+    cached result immediately (saves SerpAPI costs on duplicate citations).
     """
     query = query.strip()
     if not query:
@@ -1257,12 +1304,23 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
     formatter = get_formatter(style)
     results = []
     
+    # CHECK CACHE FIRST (new V4.2) - Skip all API calls if we have cached metadata
+    if components_cache is not None:
+        cached_components = components_cache.get(query)
+        if cached_components:
+            print(f"[UnifiedRouter] get_multiple_citations: Cache HIT for: {query[:40]}...")
+            formatted = formatter.format(cached_components)
+            return [(cached_components, formatted, "Cached")]
+    
     # TRY PARSING FIRST: If citation is complete, show reformatted version first
     parsed = parse_existing_citation(query)
     if parsed and _is_citation_complete(parsed):
         formatted = formatter.format(parsed)
         results.append((parsed, formatted, "Original (Reformatted)"))
         print(f"[UnifiedRouter] Parsed complete citation, added as first option")
+        # Store in cache for future duplicate lookups
+        if components_cache is not None:
+            components_cache.set(query, parsed)
     
     # Detect type
     detection = detect_type(query)
@@ -1428,8 +1486,8 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
             print(f"[UnifiedRouter] PubMed error: {e}")
         
         # Add Google Scholar results (paid, but excellent for fragments)
-        # ALWAYS search Google Scholar - don't skip based on result count!
-        if GOOGLE_SCHOLAR_AVAILABLE:
+        # Only search if free APIs returned < 2 results (cost optimization)
+        if GOOGLE_SCHOLAR_AVAILABLE and len(results) < 2:
             try:
                 gs_result = _google_scholar.search(query)
                 if gs_result:
@@ -1692,6 +1750,12 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
         for i, (meta, formatted, source) in enumerate(results[:limit]):
             title_short = meta.title[:40] if meta.title else 'NO TITLE'
             print(f"  #{i+1}: {meta.confidence:.1f} | {source} | {title_short}...")
+        
+        # Store best result in cache for future duplicate lookups (V4.2)
+        if components_cache is not None and results:
+            best_meta = results[0][0]
+            components_cache.set(query, best_meta)
+            print(f"[UnifiedRouter] Cached best result for: {query[:40]}...")
     
     return results[:limit]
 
@@ -1700,7 +1764,7 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
 # MULTI-OPTION CITATIONS (uses Claude's get_citation_options)
 # =============================================================================
 
-def get_citation_options_formatted(query: str, style: str = "chicago", limit: int = 6) -> List[dict]:
+def get_citation_options_formatted(query: str, style: str = "chicago", limit: int = 6, components_cache=None) -> List[dict]:
     """
     Get multiple citation options from multiple APIs.
     
@@ -1714,9 +1778,11 @@ def get_citation_options_formatted(query: str, style: str = "chicago", limit: in
     - OpenAlex
     - Semantic Scholar
     - Famous Papers/Cases Cache
+    
+    NEW (V4.2): Accepts components_cache to avoid duplicate API calls.
     """
     # Use the existing multi-engine search
-    results = get_multiple_citations(query, style, limit)
+    results = get_multiple_citations(query, style, limit, components_cache)
     return [
         {
             "citation": formatted,
