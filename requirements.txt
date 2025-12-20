@@ -22,3 +22,7 @@ google-generativeai>=0.3.0
 
 # Security/Encryption (for SOC 2 compliance)
 cryptography>=41.0.0
+
+# Procfile
+gunicorn==21.2.0
+
