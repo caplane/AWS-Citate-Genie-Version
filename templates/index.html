@@ -2227,6 +2227,47 @@
                 currentSessionId = data.session_id;
                 currentCitations = data.citations || data.notes || [];
                 
+                // =====================================================================
+                // READY FOR DOWNLOAD MODE (Added 2025-12-20)
+                // When document has footnotes/endnotes converted to author-date,
+                // the processing is complete and document is ready for immediate download
+                // =====================================================================
+                if (data.ready_for_download && data.mode === 'author-date-from-notes') {
+                    hideProcessingOverlay();
+                    document.getElementById('progress-container').classList.remove('active');
+                    
+                    // Show success message
+                    const message = data.message || `Converted ${currentCitations.length} citations to author-date format`;
+                    
+                    // Switch to a simple download view
+                    document.getElementById('landing-page').classList.add('hidden');
+                    document.getElementById('workbench').classList.add('active');
+                    
+                    // Update header
+                    document.getElementById('sidebar-file-name').textContent = file.name;
+                    document.getElementById('citation-count').textContent = `${currentCitations.length} converted`;
+                    
+                    const headerBadge = document.getElementById('output-type-badge');
+                    headerBadge.innerHTML = '<i class="fas fa-check-circle"></i> Ready';
+                    headerBadge.className = 'output-badge output-author-date';
+                    
+                    // Render converted citations (all auto-accepted)
+                    renderCitationList();
+                    if (currentCitations.length > 0) {
+                        selectCitation(0);
+                    }
+                    document.getElementById('panel-empty').style.display = 'none';
+                    document.getElementById('panel-editor').style.display = 'flex';
+                    document.getElementById('panel-footnote-editor').style.display = 'none';
+                    
+                    // Show download area immediately
+                    document.getElementById('download-area').classList.add('show');
+                    updateProgressBadge();
+                    
+                    console.log('[CitateGenie] Document ready for download:', message);
+                    return;
+                }
+                
                 // Track preview mode
                 if (data.is_preview) {
                     isPreviewMode = true;
