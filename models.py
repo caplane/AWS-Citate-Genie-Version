@@ -114,6 +114,10 @@ def parse_author_name(name: str) -> Dict[str, str]:
     
     name = name.strip()
     
+    # After stripping, check again if empty
+    if not name:
+        return {"family": "Unknown"}
+    
     # Check if organizational author
     if _is_organizational_author(name):
         return {"family": name, "is_org": True}
