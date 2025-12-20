@@ -1581,7 +1581,7 @@ def process_author_date():
             year = components.year or 'n.d.'
             
             # Prefer authors_parsed (structured data)
-            authors_parsed = getattr(metadata, 'authors_parsed', []) or []
+            authors_parsed = getattr(components, 'authors_parsed', []) or []
             
             # Fallback: parse from authors strings
             if not authors_parsed and components.authors:
@@ -1590,7 +1590,7 @@ def process_author_date():
             
             if not authors_parsed:
                 # No authors - use title
-                title = metadata.title or 'Unknown'
+                title = components.title or 'Unknown'
                 title_short = (title[:30] + '...') if len(title) > 33 else title
                 return f"({title_short}, {year})"
             
