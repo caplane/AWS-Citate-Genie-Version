@@ -1,0 +1,728 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CitateGenie Lambda Infrastructure
+  
+  Multi-region deployment with SOC 2 compliance:
+  - Lambda functions for document processing
+  - S3 for document storage
+  - Aurora Serverless for user data
+  - API Gateway for HTTP endpoints
+  - CloudWatch for logging and monitoring
+  - Secrets Manager for API keys
+
+# =============================================================================
+# PARAMETERS
+# =============================================================================
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - development
+      - staging
+      - production
+    Description: Deployment environment
+  
+  Region:
+    Type: String
+    Default: us-east-1
+    AllowedValues:
+      - us-east-1
+      - eu-west-1
+    Description: AWS region (us-east-1 for US users, eu-west-1 for EU/GDPR)
+  
+  DomainName:
+    Type: String
+    Default: api.citategenie.com
+    Description: Custom domain for API Gateway
+  
+  AlertEmail:
+    Type: String
+    Default: alerts@citategenie.com
+    Description: Email for CloudWatch alerts
+
+# =============================================================================
+# CONDITIONS
+# =============================================================================
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, production]
+  IsEURegion: !Equals [!Ref Region, eu-west-1]
+
+# =============================================================================
+# GLOBALS
+# =============================================================================
+
+Globals:
+  Function:
+    Timeout: 900  # 15 minutes max for Lambda
+    MemorySize: 1024
+    Runtime: python3.11
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        AWS_REGION_NAME: !Ref Region
+        LOG_LEVEL: !If [IsProduction, INFO, DEBUG]
+    Tracing: Active  # X-Ray tracing for SOC 2
+
+# =============================================================================
+# RESOURCES
+# =============================================================================
+
+Resources:
+
+  # ===========================================================================
+  # S3 BUCKETS - Document Storage
+  # ===========================================================================
+  
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'citategenie-documents-${Region}-${Environment}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256  # SOC 2: Encryption at rest
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled  # SOC 2: Data integrity
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteProcessedDocuments
+            Status: Enabled
+            ExpirationInDays: 30  # GDPR: Data minimization
+            Prefix: outputs/
+          - Id: DeleteUploadedDocuments
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: uploads/
+          - Id: MoveToGlacier
+            Status: Enabled
+            Prefix: audit-logs/
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+            ExpirationInDays: 2555  # 7 years for SOC 2
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: s3-access-logs/
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: DataClassification
+          Value: Confidential
+        - Key: GDPR
+          Value: !If [IsEURegion, 'true', 'false']
+
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub 'citategenie-logs-${Region}-${Environment}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: 365
+
+  # ===========================================================================
+  # SECRETS MANAGER - API Keys
+  # ===========================================================================
+  
+  OpenAISecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/openai-api-key'
+      Description: OpenAI API key for GPT-5.2
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  AnthropicSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/anthropic-api-key'
+      Description: Anthropic API key for Opus 4.5
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  StripeSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/stripe-api-key'
+      Description: Stripe API key for payments
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ===========================================================================
+  # AURORA SERVERLESS - User Database
+  # ===========================================================================
+  
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnets for Aurora Serverless
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Aurora Serverless
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: !Sub 'citategenie-${Environment}'
+      Engine: aurora-postgresql
+      EngineMode: provisioned
+      EngineVersion: '15.4'
+      DatabaseName: citategenie
+      MasterUsername: !Sub '{{resolve:secretsmanager:citategenie/${Environment}/db-credentials:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:citategenie/${Environment}/db-credentials:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DBSecurityGroup
+      StorageEncrypted: true  # SOC 2: Encryption at rest
+      EnableHttpEndpoint: true  # Data API for Lambda
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 16
+      BackupRetentionPeriod: 30
+      DeletionProtection: !If [IsProduction, true, false]
+      EnableCloudwatchLogsExports:
+        - postgresql
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: DataClassification
+          Value: Confidential
+
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  DBCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'citategenie/${Environment}/db-credentials'
+      Description: Aurora database credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "citategenie_admin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+
+  # ===========================================================================
+  # VPC - Network Isolation
+  # ===========================================================================
+  
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-vpc-${Environment}'
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-private-1-${Environment}'
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-private-2-${Environment}'
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.101.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-public-1-${Environment}'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-igw-${Environment}'
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-nat-${Environment}'
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-private-rt-${Environment}'
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-public-rt-${Environment}'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda functions
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub 'citategenie-lambda-sg-${Environment}'
+
+  # ===========================================================================
+  # LAMBDA FUNCTIONS
+  # ===========================================================================
+  
+  ProcessDocumentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'citategenie-process-document-${Environment}'
+      CodeUri: ./
+      Handler: lambda_processor.lambda_handler
+      Description: Process documents with citation lookup and transformation
+      MemorySize: 2048  # More memory for parallel processing
+      Timeout: 900  # 15 minutes
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      Environment:
+        Variables:
+          DOCUMENT_BUCKET: !Ref DocumentBucket
+          DB_SECRET_ARN: !Ref DBCredentialsSecret
+          OPENAI_SECRET_ARN: !Ref OpenAISecret
+          ANTHROPIC_SECRET_ARN: !Ref AnthropicSecret
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DocumentBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Ref OpenAISecret
+                - !Ref AnthropicSecret
+                - !Ref DBCredentialsSecret
+            - Effect: Allow
+              Action:
+                - rds-data:ExecuteStatement
+                - rds-data:BatchExecuteStatement
+              Resource: !GetAtt AuroraCluster.DBClusterArn
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+      Events:
+        ProcessApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /process
+            Method: POST
+      Tags:
+        Environment: !Ref Environment
+
+  GDPRExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'citategenie-gdpr-export-${Environment}'
+      CodeUri: ./
+      Handler: lambda_processor.lambda_handler
+      Description: GDPR data export (Article 15 & 20)
+      MemorySize: 512
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      Environment:
+        Variables:
+          DOCUMENT_BUCKET: !Ref DocumentBucket
+          DB_SECRET_ARN: !Ref DBCredentialsSecret
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref DocumentBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref DBCredentialsSecret
+            - Effect: Allow
+              Action:
+                - rds-data:ExecuteStatement
+              Resource: !GetAtt AuroraCluster.DBClusterArn
+      Events:
+        ExportApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /gdpr/export
+            Method: POST
+      Tags:
+        Environment: !Ref Environment
+
+  GDPRDeleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'citategenie-gdpr-delete-${Environment}'
+      CodeUri: ./
+      Handler: lambda_processor.lambda_handler
+      Description: GDPR data deletion (Article 17)
+      MemorySize: 512
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      Environment:
+        Variables:
+          DOCUMENT_BUCKET: !Ref DocumentBucket
+          DB_SECRET_ARN: !Ref DBCredentialsSecret
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DocumentBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref DBCredentialsSecret
+            - Effect: Allow
+              Action:
+                - rds-data:ExecuteStatement
+              Resource: !GetAtt AuroraCluster.DBClusterArn
+      Events:
+        DeleteApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /gdpr/delete
+            Method: POST
+      Tags:
+        Environment: !Ref Environment
+
+  # ===========================================================================
+  # API GATEWAY
+  # ===========================================================================
+  
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'citategenie-api-${Environment}'
+      StageName: !Ref Environment
+      TracingEnabled: true  # X-Ray tracing
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","path":"$context.path","status":"$context.status","responseLength":"$context.responseLength","userAgent":"$context.identity.userAgent"}'
+      MethodSettings:
+        - HttpMethod: '*'
+          ResourcePath: '/*'
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Request-Id'"
+        AllowOrigin: "'*'"  # Restrict in production
+      Tags:
+        Environment: !Ref Environment
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/citategenie-${Environment}'
+      RetentionInDays: 365  # SOC 2: 1 year retention
+
+  # ===========================================================================
+  # CLOUDWATCH - Monitoring & Alerts
+  # ===========================================================================
+  
+  ProcessingErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'citategenie-processing-errors-${Environment}'
+      AlarmDescription: Alert when document processing errors exceed threshold
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessDocumentFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  HighCostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'citategenie-high-cost-${Environment}'
+      AlarmDescription: Alert when estimated costs exceed threshold
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      Period: 21600  # 6 hours
+      EvaluationPeriods: 1
+      Threshold: 100  # $100
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+
+  SecurityEventAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'citategenie-security-events-${Environment}'
+      AlarmDescription: Alert on security-related log events
+      MetricName: SecurityEvents
+      Namespace: CitateGenie
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'citategenie-alerts-${Environment}'
+      DisplayName: CitateGenie Alerts
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ===========================================================================
+  # CLOUDWATCH LOG GROUPS - Audit Logging
+  # ===========================================================================
+  
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/citategenie/${Environment}/audit'
+      RetentionInDays: 2555  # 7 years for SOC 2
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: SOC2Audit
+
+  SecurityLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/citategenie/${Environment}/security'
+      RetentionInDays: 2555  # 7 years
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Purpose
+          Value: SecurityAudit
+
+  # ===========================================================================
+  # CLOUDWATCH METRIC FILTERS - SOC 2 Monitoring
+  # ===========================================================================
+  
+  SecurityEventMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref SecurityLogGroup
+      FilterPattern: '{ $.severity = "high" || $.severity = "critical" }'
+      MetricTransformations:
+        - MetricName: SecurityEvents
+          MetricNamespace: CitateGenie
+          MetricValue: '1'
+
+  FailedAuthMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref AuditLogGroup
+      FilterPattern: '{ $.action = "auth.failed" }'
+      MetricTransformations:
+        - MetricName: FailedAuthentications
+          MetricNamespace: CitateGenie
+          MetricValue: '1'
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  DocumentBucketName:
+    Description: S3 bucket for documents
+    Value: !Ref DocumentBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-DocumentBucket'
+
+  DatabaseClusterArn:
+    Description: Aurora cluster ARN
+    Value: !GetAtt AuroraCluster.DBClusterArn
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseClusterArn'
+
+  DatabaseEndpoint:
+    Description: Aurora cluster endpoint
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseEndpoint'
+
+  AuditLogGroupArn:
+    Description: Audit log group ARN
+    Value: !GetAtt AuditLogGroup.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AuditLogGroup'
+
+  ProcessFunctionArn:
+    Description: Document processing Lambda ARN
+    Value: !GetAtt ProcessDocumentFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProcessFunctionArn'
