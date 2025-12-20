@@ -1,0 +1,1494 @@
+"""
+citeflex/engines/ai_lookup.py
+
+Consolidated AI-powered citation engine.
+
+This is the SINGLE module for all AI operations in CiteFlex:
+- Classification (type detection)
+- Batch classification (for document processing)
+- Parenthetical citation lookup: "(Simonton, 1992)"
+- Fragment lookup with verification: "caplan trains brains"
+
+Provider chain is configurable via AI_PROVIDER_CHAIN environment variable.
+Default order optimizes for cost: gemini → openai → claude
+
+ARCHITECTURE:
+- Layer 5: Classification (determine citation type)
+- Layer 6: AI-assisted search (last resort after free/paid DBs fail)
+
+HALLUCINATION SAFEGUARD:
+- AI suggestions are ALWAYS verified against free databases
+- If no database confirms the AI's guess, result is rejected
+
+Version History:
+    2025-12-12 V2.0: MAJOR CONSOLIDATION
+                     - Merged routers/claude.py (classification, batch)
+                     - Merged routers/gemini.py (classification)
+                     - Added configurable provider chain
+                     - Added lookup_fragment() with gist context + DB verification
+                     - Deleted routers/claude.py, routers/gemini.py
+    2025-12-10 V1.1: Added multi-option support for parenthetical citations
+    2025-12-10 V1.0: Initial implementation - OpenAI/Claude for parentheticals
+"""
+
+import os
+import re
+import json
+import time
+import requests
+from typing import Optional, List, Tuple, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from models import SourceComponents, CitationType
+from config import DEFAULT_TIMEOUT
+from cost_tracker import log_api_call
+
+# =============================================================================
+# API KEYS (from config.py - centralized key management)
+# =============================================================================
+
+from config import OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY
+
+# =============================================================================
+# PROVIDER CHAIN CONFIGURATION
+# =============================================================================
+# Order determines fallback sequence. Default optimizes for cost:
+#   Gemini Flash:  ~$0.075/1M input tokens (cheapest)
+#   OpenAI GPT-4o: ~$2.50/1M input tokens
+#   Claude Sonnet: ~$3.00/1M input tokens
+
+AI_PROVIDER_CHAIN = os.environ.get('AI_PROVIDER_CHAIN', 'gemini,openai,claude').split(',')
+AI_PROVIDER_CHAIN = [p.strip().lower() for p in AI_PROVIDER_CHAIN if p.strip()]
+
+if not AI_PROVIDER_CHAIN:
+    AI_PROVIDER_CHAIN = ['gemini', 'openai', 'claude']
+
+# Model configuration
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+
+# Check which providers are available
+AVAILABLE_PROVIDERS = []
+if GEMINI_API_KEY:
+    AVAILABLE_PROVIDERS.append('gemini')
+if OPENAI_API_KEY:
+    AVAILABLE_PROVIDERS.append('openai')
+if ANTHROPIC_API_KEY:
+    AVAILABLE_PROVIDERS.append('claude')
+
+# Filter chain to only available providers
+ACTIVE_CHAIN = [p for p in AI_PROVIDER_CHAIN if p in AVAILABLE_PROVIDERS]
+
+if ACTIVE_CHAIN:
+    print(f"[AI_Lookup] Provider chain: {' → '.join(ACTIVE_CHAIN)}")
+else:
+    print("[AI_Lookup] WARNING: No AI providers configured")
+
+
+# =============================================================================
+# UNIFIED AI CALLER
+# =============================================================================
+
+def _call_ai(prompt: str, system: str, max_tokens: int = 1000) -> Optional[str]:
+    """
+    Call AI using the configured provider chain.
+    
+    Tries each provider in order until one succeeds.
+    Returns raw text response or None if all fail.
+    """
+    for provider in ACTIVE_CHAIN:
+        try:
+            if provider == 'gemini':
+                result = _call_gemini(prompt, system, max_tokens)
+            elif provider == 'openai':
+                result = _call_openai(prompt, system, max_tokens)
+            elif provider == 'claude':
+                result = _call_claude(prompt, system, max_tokens)
+            else:
+                continue
+            
+            if result:
+                return result
+                
+        except Exception as e:
+            print(f"[AI_Lookup] {provider} failed: {e}")
+            continue
+    
+    return None
+
+
+def _call_gemini(prompt: str, system: str, max_tokens: int) -> Optional[str]:
+    """Call Gemini API."""
+    if not GEMINI_API_KEY:
+        return None
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    
+    response = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY,
+        },
+        json={
+            'contents': [{'parts': [{'text': f"{system}\n\n{prompt}"}]}],
+            'generationConfig': {'temperature': 0.1, 'maxOutputTokens': max_tokens}
+        },
+        timeout=30
+    )
+    
+    if response.status_code == 429:
+        raise Exception("Rate limited")
+    
+    response.raise_for_status()
+    data = response.json()
+    
+    # Extract usage for cost tracking
+    usage = data.get('usageMetadata', {})
+    input_tokens = usage.get('promptTokenCount', 0)
+    output_tokens = usage.get('candidatesTokenCount', 0)
+    log_api_call('gemini', input_tokens, output_tokens, prompt[:100], 'ai_lookup')
+    
+    candidates = data.get('candidates', [])
+    if not candidates:
+        return None
+    
+    return candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+
+
+def _call_openai(prompt: str, system: str, max_tokens: int) -> Optional[str]:
+    """Call OpenAI API."""
+    if not OPENAI_API_KEY:
+        return None
+    
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": max_tokens
+        },
+        timeout=30
+    )
+    
+    if response.status_code == 429:
+        raise Exception("Rate limited")
+    
+    response.raise_for_status()
+    result = response.json()
+    
+    # Extract usage for cost tracking
+    usage = result.get('usage', {})
+    input_tokens = usage.get('prompt_tokens', 0)
+    output_tokens = usage.get('completion_tokens', 0)
+    log_api_call('openai', input_tokens, output_tokens, prompt[:100], 'ai_lookup')
+    
+    return result['choices'][0]['message']['content']
+
+
+def _call_claude(prompt: str, system: str, max_tokens: int) -> Optional[str]:
+    """Call Claude API."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01"
+        },
+        json={
+            "model": CLAUDE_MODEL,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}]
+        },
+        timeout=30
+    )
+    
+    if response.status_code == 429:
+        raise Exception("Rate limited")
+    
+    response.raise_for_status()
+    result = response.json()
+    
+    # Extract usage for cost tracking
+    usage = result.get('usage', {})
+    input_tokens = usage.get('input_tokens', 0)
+    output_tokens = usage.get('output_tokens', 0)
+    log_api_call('claude', input_tokens, output_tokens, prompt[:100], 'ai_lookup')
+    
+    return result['content'][0]['text']
+
+
+def _parse_json_response(text: str) -> Optional[dict]:
+    """Parse JSON from AI response, handling markdown code blocks."""
+    if not text:
+        return None
+    
+    text = text.strip()
+    
+    # Remove markdown code blocks
+    if text.startswith('```'):
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+    
+    # Find JSON object or array
+    json_match = re.search(r'[\[{][\s\S]*[\]}]', text)
+    if not json_match:
+        return None
+    
+    try:
+        return json.loads(json_match.group())
+    except json.JSONDecodeError:
+        return None
+
+
+# =============================================================================
+# NEWSPAPER/MAGAZINE URL LOOKUP (ChatGPT-first strategy)
+# =============================================================================
+
+NEWSPAPER_URL_SYSTEM = """You are a citation metadata extractor. Given a newspaper or magazine article URL, extract the citation metadata.
+
+CRITICAL: You must extract the author's name. Look for bylines like "By John Smith" or author credits. Opinion pieces and columns always have authors (e.g., Peggy Noonan for WSJ opinion columns).
+
+Extract the following fields:
+- title: The article headline (required)
+- authors: List of author names in "First Last" format. IMPORTANT: Most articles have authors - look carefully for bylines. Only leave empty for unsigned editorials.
+- publication: The newspaper or magazine name (e.g., "The Wall Street Journal", "The New York Times")
+- date: Publication date in "Month Day, Year" format (e.g., "December 12, 2025")
+- section: Section name if identifiable (e.g., "Opinion", "Business", "Arts")
+
+Respond ONLY with valid JSON, no explanation:
+{"title": "...", "authors": ["First Last"], "publication": "...", "date": "Month Day, Year", "section": "..."}
+
+If you cannot access or identify the article, respond: {"error": "Unable to access article"}"""
+
+
+# =============================================================================
+# ORGANIZATION NAME LOOKUP
+# =============================================================================
+
+def lookup_org_name(domain: str) -> Optional[str]:
+    """
+    Look up the full organization name for a domain using AI.
+    
+    This is a lightweight call specifically for .org domains where we
+    couldn't find the author through scraping or lookup tables.
+    
+    Args:
+        domain: Domain name (e.g., "acore.org", "apa.org")
+        
+    Returns:
+        Full organization name (e.g., "American Council on Renewable Energy")
+        or None if lookup fails
+        
+    Examples:
+        lookup_org_name("acore.org") → "American Council on Renewable Energy"
+        lookup_org_name("apa.org") → "American Psychological Association"
+        lookup_org_name("brookings.edu") → "Brookings Institution"
+    """
+    if not domain:
+        return None
+    
+    # Clean domain
+    domain = domain.lower().strip()
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    
+    # Build prompt
+    prompt = f"What is the full official name of the organization that owns the domain '{domain}'? Reply with ONLY the organization name, nothing else."
+    
+    # Try each provider in chain
+    for provider in AI_PROVIDER_CHAIN:
+        if provider not in AVAILABLE_PROVIDERS:
+            continue
+        
+        try:
+            if provider == 'gemini' and GEMINI_API_KEY:
+                result = _call_gemini_simple(prompt)
+            elif provider == 'openai' and OPENAI_API_KEY:
+                result = _call_openai_simple(prompt)
+            elif provider == 'claude' and ANTHROPIC_API_KEY:
+                result = _call_claude_simple(prompt)
+            else:
+                continue
+            
+            if result:
+                # Clean up the response
+                result = result.strip().strip('"').strip("'")
+                # Reject if it looks like an error or too short
+                if len(result) > 3 and 'error' not in result.lower() and 'sorry' not in result.lower():
+                    print(f"[AI_Lookup] Organization name for {domain}: {result}")
+                    return result
+        except Exception as e:
+            print(f"[AI_Lookup] {provider} error for org lookup: {e}")
+            continue
+    
+    return None
+
+
+def _call_gemini_simple(prompt: str) -> Optional[str]:
+    """Simple Gemini call for short text responses."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 100, "temperature": 0.1}
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, params=params, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            log_api_call('gemini', 'org_lookup', 0.0001)  # Minimal cost
+            return text.strip()
+    except Exception as e:
+        print(f"[AI_Lookup] Gemini simple call error: {e}")
+    return None
+
+
+def _call_openai_simple(prompt: str) -> Optional[str]:
+    """Simple OpenAI call for short text responses."""
+    url = "https://api.openai.com/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": OPENAI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 100,
+        "temperature": 0.1
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            log_api_call('openai', 'org_lookup', 0.001)  # Minimal cost
+            return text.strip()
+    except Exception as e:
+        print(f"[AI_Lookup] OpenAI simple call error: {e}")
+    return None
+
+
+def _call_claude_simple(prompt: str) -> Optional[str]:
+    """Simple Claude call for short text responses."""
+    url = "https://api.anthropic.com/v1/messages"
+    
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        if response.status_code == 200:
+            result = response.json()
+            text = result.get("content", [{}])[0].get("text", "")
+            log_api_call('claude', 'org_lookup', 0.001)  # Minimal cost
+            return text.strip()
+    except Exception as e:
+        print(f"[AI_Lookup] Claude simple call error: {e}")
+    return None
+
+
+def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceComponents]:
+    """
+    Look up newspaper/magazine article metadata using AI.
+    
+    IMPORTANT: AI cannot actually browse URLs via API. It guesses based on
+    URL patterns and training data. When verify=True, results are checked
+    for basic consistency (newspapers are harder to verify in databases).
+    
+    Args:
+        url: The newspaper/magazine article URL
+        verify: If True, apply additional validation checks
+        
+    Returns:
+        SourceComponents with extracted information, or None if lookup fails
+    """
+    if not OPENAI_API_KEY:
+        print("[AI_Lookup] OpenAI API key not configured for newspaper lookup")
+        return None
+    
+    prompt = f"Extract citation metadata from this article URL:\n{url}"
+    
+    try:
+        response = _call_openai(prompt, NEWSPAPER_URL_SYSTEM, max_tokens=500)
+        
+        if not response:
+            print("[AI_Lookup] No response from AI for newspaper URL")
+            return None
+        
+        data = _parse_json_response(response)
+        
+        if not data:
+            print(f"[AI_Lookup] Failed to parse AI response: {response[:200]}")
+            return None
+        
+        if data.get('error'):
+            print(f"[AI_Lookup] AI error: {data['error']}")
+            return None
+        
+        # Build SourceComponents from response
+        from datetime import datetime
+        access_date = datetime.now().strftime('%B %d, %Y').replace(' 0', ' ')
+        
+        # Extract year from date if present
+        year = None
+        date_str = data.get('date', '')
+        if date_str:
+            year_match = re.search(r'\b(19|20)\d{2}\b', date_str)
+            if year_match:
+                year = year_match.group(0)
+        
+        result = SourceComponents(
+            citation_type=CitationType.NEWSPAPER,
+            raw_source=url,
+            source_engine="AI Lookup",
+            title=data.get('title', ''),
+            authors=data.get('authors', []),
+            newspaper=data.get('publication', ''),
+            date=date_str,
+            year=year,
+            url=url,
+            access_date=access_date,
+            confidence=0.7,  # Moderate confidence - newspapers are harder to verify
+            raw_data=data,
+        )
+        
+        # If verification requested, do basic consistency checks
+        if verify:
+            # For newspapers, we can't easily verify against databases
+            # But we can check for obvious hallucination signs:
+            # 1. Title should contain some words from the URL slug
+            # 2. Publication should match the domain
+            if not _verify_newspaper_consistency(result, url):
+                print(f"[AI_Lookup] ✗ Newspaper metadata failed consistency check")
+                return None
+            result.source_engine = "AI Lookup (consistency checked)"
+            result.confidence = 0.85
+        
+        print(f"[AI_Lookup] Extracted newspaper: '{result.title[:50]}...' by {result.authors} from {result.newspaper}")
+        return result
+        
+    except Exception as e:
+        print(f"[AI_Lookup] Newspaper lookup error: {e}")
+        return None
+
+
+# =============================================================================
+# ACADEMIC URL LOOKUP (ChatGPT-first strategy)
+# =============================================================================
+# Handles law reviews, humanities journals, think tank papers, working papers,
+# and other academic sources that lack DOIs or aren't in standard databases.
+
+ACADEMIC_URL_SYSTEM = """You are a citation metadata extractor for academic publications. Given a URL to an academic article, paper, working paper, or report, extract the citation metadata.
+
+CRITICAL: You must extract the author's name(s). Academic articles almost always have authors. Look for bylines, author credits, or "by" attributions. Law review articles always have authors.
+
+Extract the following fields:
+- title: The article/paper title (required)
+- authors: List of author names in "First Last" format. IMPORTANT: Academic articles have authors - look carefully and extract them. Do not leave empty unless truly anonymous.
+- journal: The journal, review, or publication name (e.g., "Harvard Law Review", "Brookings Papers")
+- volume: Volume number (if available)
+- issue: Issue number (if available)
+- pages: Page range (e.g., "1234-1289") or starting page (if available)
+- year: Publication year (4 digits)
+- working_paper_number: Working paper or report number (if applicable, e.g., "Working Paper No. 28")
+
+Respond ONLY with valid JSON, no explanation:
+{"title": "...", "authors": ["First Last"], "journal": "...", "volume": "", "issue": "", "pages": "", "year": "2025", "working_paper_number": ""}
+
+If you cannot access or identify the article, respond: {"error": "Unable to access article"}"""
+
+
+def lookup_academic_url(url: str, verify: bool = False) -> Optional[SourceComponents]:
+    """
+    Look up academic publication metadata using AI.
+    
+    IMPORTANT: AI cannot actually browse URLs via API. It guesses based on
+    URL patterns and training data. When verify=True, results are checked
+    against academic databases to prevent hallucinations.
+    
+    Args:
+        url: The academic publication URL
+        verify: If True, verify AI result against Crossref/OpenAlex/PubMed
+        
+    Returns:
+        SourceComponents with extracted information, or None if lookup fails
+        or verification fails
+    """
+    if not OPENAI_API_KEY:
+        print("[AI_Lookup] OpenAI API key not configured for academic lookup")
+        return None
+    
+    prompt = f"Extract citation metadata from this academic publication URL:\n{url}"
+    
+    try:
+        response = _call_openai(prompt, ACADEMIC_URL_SYSTEM, max_tokens=500)
+        
+        if not response:
+            print("[AI_Lookup] No response from AI for academic URL")
+            return None
+        
+        data = _parse_json_response(response)
+        
+        if not data:
+            print(f"[AI_Lookup] Failed to parse AI response: {response[:200]}")
+            return None
+        
+        if data.get('error'):
+            print(f"[AI_Lookup] AI error: {data['error']}")
+            return None
+        
+        # Build initial SourceComponents from AI response
+        from datetime import datetime
+        access_date = datetime.now().strftime('%B %d, %Y').replace(' 0', ' ')
+        
+        ai_result = SourceComponents(
+            citation_type=CitationType.JOURNAL,
+            raw_source=url,
+            source_engine="AI Lookup (unverified)",
+            title=data.get('title', ''),
+            authors=data.get('authors', []),
+            journal=data.get('journal', ''),
+            volume=data.get('volume', ''),
+            issue=data.get('issue', ''),
+            pages=data.get('pages', ''),
+            year=data.get('year', ''),
+            url=url,
+            access_date=access_date,
+            confidence=0.5,  # Low confidence until verified
+            raw_data=data,
+        )
+        
+        print(f"[AI_Lookup] AI suggests: '{ai_result.title[:50]}...' by {ai_result.authors}")
+        
+        # If verification requested, check against databases
+        if verify:
+            verified = _verify_url_components(ai_result, url)
+            if verified:
+                verified.url = url
+                verified.source_engine = "AI + Database (verified)"
+                verified.confidence = 0.95
+                print(f"[AI_Lookup] ✓ Verified: '{verified.title[:50]}...'")
+                return verified
+            else:
+                print(f"[AI_Lookup] ✗ Could not verify AI result against databases")
+                return None
+        
+        # No verification requested - return unverified (legacy behavior)
+        return ai_result
+        
+    except Exception as e:
+        print(f"[AI_Lookup] Academic lookup error: {e}")
+        return None
+
+
+# Backward compatibility alias
+lookup_journal_url = lookup_academic_url
+
+
+# =============================================================================
+# CLASSIFICATION (Layer 5)
+# =============================================================================
+
+CLASSIFY_SYSTEM = """You are a citation classification expert. Analyze the input and classify it.
+
+Classify as one of:
+- legal: Court cases, statutes, legal documents (contains "v." or "v ")
+- book: Books, monographs, edited volumes
+- journal: Academic journal articles, peer-reviewed papers
+- newspaper: Newspaper/magazine articles
+- government: Government reports, official documents
+- interview: Interviews, oral histories, personal communications
+- url: Websites, online resources
+- unknown: Cannot determine
+
+Respond in JSON only:
+{"type": "...", "confidence": 0.0-1.0, "title": "", "authors": [], "year": "", "reasoning": "brief explanation"}"""
+
+
+def classify_citation(text: str) -> Tuple[CitationType, Optional[SourceComponents]]:
+    """
+    Classify a citation using AI.
+    
+    Args:
+        text: The citation text to classify
+        
+    Returns:
+        Tuple of (CitationType, optional SourceComponents with extracted info)
+    """
+    if not ACTIVE_CHAIN:
+        return CitationType.UNKNOWN, None
+    
+    prompt = f"Classify this citation:\n\n{text}"
+    
+    response = _call_ai(prompt, CLASSIFY_SYSTEM, max_tokens=500)
+    data = _parse_json_response(response)
+    
+    if not data:
+        return CitationType.UNKNOWN, None
+    
+    type_map = {
+        'legal': CitationType.LEGAL,
+        'book': CitationType.BOOK,
+        'journal': CitationType.JOURNAL,
+        'newspaper': CitationType.NEWSPAPER,
+        'government': CitationType.GOVERNMENT,
+        'interview': CitationType.INTERVIEW,
+        'url': CitationType.URL,
+    }
+    
+    citation_type = type_map.get(data.get('type', '').lower(), CitationType.UNKNOWN)
+    
+    if citation_type == CitationType.UNKNOWN:
+        return citation_type, None
+    
+    metadata = SourceComponents(
+        citation_type=citation_type,
+        raw_source=text,
+        source_engine="AI Classification",
+        title=data.get('title', ''),
+        authors=data.get('authors', []),
+        year=data.get('year', ''),
+        confidence=data.get('confidence', 0.5),
+    )
+    
+    return citation_type, metadata
+
+
+# Backward compatibility aliases
+def classify_with_claude(text: str) -> Tuple[CitationType, Optional[SourceComponents]]:
+    """Backward compatibility: routes to classify_citation()."""
+    return classify_citation(text)
+
+def classify_with_gemini(text: str) -> Tuple[CitationType, Optional[SourceComponents]]:
+    """Backward compatibility: routes to classify_citation()."""
+    return classify_citation(text)
+
+
+# =============================================================================
+# BATCH CLASSIFICATION (for document_processor.py)
+# =============================================================================
+
+BATCH_CLASSIFY_SYSTEM = """You are a citation classification expert. Classify each citation in the list.
+
+For each, determine type:
+- legal: Court cases (contains "v." or "v "), statutes
+- book: Books, monographs, edited volumes
+- journal: Academic journal articles
+- newspaper: Newspaper/magazine articles
+- government: Government reports
+- interview: Interviews, oral histories
+- letter: Letters, correspondence
+- url: Websites
+- skip: Ibid, Id., supra references, or empty entries
+- unknown: Cannot determine
+
+Respond with JSON array only:
+[{"index": 1, "type": "book"}, {"index": 2, "type": "skip"}, ...]"""
+
+
+def batch_classify_notes(notes: list, batch_size: int = 50) -> dict:
+    """
+    Classify multiple notes in batches using AI.
+    
+    Args:
+        notes: List of dicts with 'id' and 'text' keys
+        batch_size: Notes per API call (default 50)
+        
+    Returns:
+        Dict mapping note text → type string
+    """
+    if not ACTIVE_CHAIN:
+        print("[AI_Lookup] No AI providers available for batch classification")
+        return {}
+    
+    classifications = {}
+    
+    # Pre-filter ibid references (no API call needed)
+    IBID_FILTER = re.compile(
+        r'^(?:ibid\.?|ibidem\.?|id\.?)(?:\s|$|,|\.|\s*at\s)',
+        re.IGNORECASE
+    )
+    
+    valid_notes = []
+    for note in notes:
+        text = note.get('text', '').strip()
+        if not text:
+            continue
+        if IBID_FILTER.match(text):
+            classifications[text] = 'skip'
+            continue
+        valid_notes.append({'idx': len(valid_notes), 'text': text})
+    
+    if not valid_notes:
+        return classifications
+    
+    print(f"[AI_Lookup] Batch classifying {len(valid_notes)} notes...")
+    start_time = time.time()
+    
+    # Process in batches
+    for batch_start in range(0, len(valid_notes), batch_size):
+        batch = valid_notes[batch_start:batch_start + batch_size]
+        batch_num = batch_start // batch_size + 1
+        total_batches = (len(valid_notes) + batch_size - 1) // batch_size
+        
+        print(f"[AI_Lookup] Batch {batch_num}/{total_batches} ({len(batch)} notes)...")
+        
+        # Build numbered list (truncate long notes)
+        notes_text = "\n".join([
+            f"{i+1}. {note['text'][:400]}"
+            for i, note in enumerate(batch)
+        ])
+        
+        prompt = f"Classify these {len(batch)} citations:\n\n{notes_text}"
+        
+        try:
+            response = _call_ai(prompt, BATCH_CLASSIFY_SYSTEM, max_tokens=2000)
+            results = _parse_json_response(response)
+            
+            if isinstance(results, list):
+                for result in results:
+                    idx = result.get('index', 0) - 1
+                    if 0 <= idx < len(batch):
+                        note_text = batch[idx]['text']
+                        classifications[note_text] = result.get('type', 'unknown')
+                        
+        except Exception as e:
+            print(f"[AI_Lookup] Batch {batch_num} error: {e}")
+    
+    elapsed = time.time() - start_time
+    print(f"[AI_Lookup] Batch classification done in {elapsed:.1f}s")
+    return classifications
+
+
+# =============================================================================
+# PARENTHETICAL CITATION PARSER
+# =============================================================================
+
+SIMPLE_AUTHOR_YEAR_PATTERN = re.compile(r'\(([^()]+?),\s*(\d{4}[a-z]?)\)')
+
+
+def parse_parenthetical_citation(text: str) -> Optional[Tuple[List[str], str]]:
+    """
+    Parse APA-style parenthetical citation into authors and year.
+    
+    Examples:
+        "(Simonton, 1992)" → (["Simonton"], "1992")
+        "(Smith & Jones, 2020)" → (["Smith", "Jones"], "2020")
+    """
+    text = text.strip()
+    
+    match = SIMPLE_AUTHOR_YEAR_PATTERN.match(text)
+    if not match:
+        # Try adding parens
+        if re.match(r'^[A-Z][a-z]+.*,\s*\d{4}', text):
+            text = f"({text})"
+            match = SIMPLE_AUTHOR_YEAR_PATTERN.match(text)
+    
+    if not match:
+        return None
+    
+    authors_part = match.group(1).strip()
+    year = match.group(2).strip()
+    
+    if 'et al' in authors_part.lower():
+        authors = [authors_part]
+    else:
+        authors_part = re.sub(r'\s*&\s*', ', ', authors_part)
+        authors_part = re.sub(r'\s+and\s+', ', ', authors_part, flags=re.IGNORECASE)
+        authors = [a.strip() for a in authors_part.split(',') if a.strip()]
+    
+    return (authors, year)
+
+
+def is_parenthetical_citation(text: str) -> bool:
+    """Check if text looks like a parenthetical citation."""
+    return parse_parenthetical_citation(text) is not None
+
+
+# =============================================================================
+# PARENTHETICAL LOOKUP (Layer 6)
+# =============================================================================
+
+LOOKUP_SYSTEM = """You are an expert academic reference librarian. Given author name(s) and a publication year, identify the most likely academic work.
+
+Respond with JSON only:
+{
+    "found": true/false,
+    "confidence": "high"/"medium"/"low",
+    "citation_type": "journal"/"book"/"chapter"/"conference"/"report",
+    "title": "Full title",
+    "authors": ["Last, First M."],
+    "year": "YYYY",
+    "journal": "Journal name (if article)",
+    "volume": "vol",
+    "issue": "issue",
+    "pages": "start-end",
+    "doi": "10.xxxx/xxxxx",
+    "publisher": "Publisher (if book)",
+    "place": "City (if book)"
+}
+
+Only include fields you're confident about. Set found=false if unknown."""
+
+
+LOOKUP_MULTI_SYSTEM = """You are an expert academic reference librarian. Given author name(s) and year, identify ALL likely works (authors often publish multiple works per year).
+
+Return up to 5 matches in JSON:
+{
+    "works": [
+        {
+            "confidence": "high"/"medium"/"low",
+            "citation_type": "journal"/"book"/...,
+            "title": "...",
+            "authors": ["Last, First"],
+            "year": "YYYY",
+            "journal": "...",
+            "volume": "...",
+            "pages": "...",
+            "doi": "...",
+            "publisher": "...",
+            "place": "..."
+        }
+    ]
+}
+
+Order by likelihood. Only include fields you're confident about."""
+
+
+def lookup_parenthetical_citation(citation_text: str, context: str = "") -> Optional[SourceComponents]:
+    """
+    Look up a parenthetical citation like "(Simonton, 1992)".
+    
+    Args:
+        citation_text: Parenthetical citation text
+        context: Optional document context/gist
+        
+    Returns:
+        SourceComponents if found, None otherwise
+    """
+    parsed = parse_parenthetical_citation(citation_text)
+    if not parsed:
+        print(f"[AI_Lookup] Could not parse: {citation_text}")
+        return None
+    
+    authors, year = parsed
+    return _ai_lookup_authors_year(authors, year, context)
+
+
+def lookup_parenthetical_citation_options(
+    citation_text: str,
+    context: str = "",
+    limit: int = 5
+) -> List[SourceComponents]:
+    """
+    Get multiple options for a parenthetical citation.
+    
+    Use when presenting choices to user (authors often have multiple works per year).
+    """
+    parsed = parse_parenthetical_citation(citation_text)
+    if not parsed:
+        return []
+    
+    authors, year = parsed
+    print(f"[AI_Lookup] Getting options for: {', '.join(authors)} ({year})")
+    
+    authors_str = ", ".join(authors)
+    prompt = f"Authors: {authors_str}\nYear: {year}"
+    if context:
+        prompt += f"\nContext: {context}"
+    prompt += f"\n\nReturn up to {limit} matches. JSON only."
+    
+    response = _call_ai(prompt, LOOKUP_MULTI_SYSTEM, max_tokens=2000)
+    data = _parse_json_response(response)
+    
+    if not data or not isinstance(data.get('works'), list):
+        return []
+    
+    results = []
+    for work in data['works'][:limit]:
+        meta = _dict_to_components(work, authors, year)
+        if meta and meta.title:
+            results.append(meta)
+    
+    print(f"[AI_Lookup] Found {len(results)} options")
+    return results
+
+
+def _ai_lookup_authors_year(authors: List[str], year: str, context: str = "") -> Optional[SourceComponents]:
+    """Internal: Look up work by authors + year."""
+    if not ACTIVE_CHAIN:
+        return None
+    
+    print(f"[AI_Lookup] Looking up: {', '.join(authors)} ({year})")
+    
+    authors_str = ", ".join(authors)
+    prompt = f"Authors: {authors_str}\nYear: {year}"
+    if context:
+        prompt += f"\nContext: {context}"
+    prompt += "\n\nJSON only."
+    
+    response = _call_ai(prompt, LOOKUP_SYSTEM, max_tokens=600)
+    data = _parse_json_response(response)
+    
+    if not data or not data.get('found'):
+        print(f"[AI_Lookup] Not found: {', '.join(authors)} ({year})")
+        return None
+    
+    return _dict_to_components(data, authors, year)
+
+
+# =============================================================================
+# FRAGMENT LOOKUP WITH VERIFICATION (Layer 6 - Last Resort)
+# =============================================================================
+
+FRAGMENT_SYSTEM = """You are a scholarly citation expert. Given a fragmentary citation hint and document context, identify the most likely published work.
+
+USE YOUR KNOWLEDGE to guess the work, then provide metadata for database verification.
+
+Respond with JSON only:
+{
+    "confidence": 0.0-1.0,
+    "citation_type": "journal"/"book"/"legal"/"newspaper",
+    "title": "Full title of the work",
+    "authors": ["First Last"],
+    "year": "YYYY",
+    "journal": "Journal name (if article)",
+    "volume": "volume",
+    "issue": "issue",
+    "pages": "start-end",
+    "doi": "DOI if known",
+    "pmid": "PubMed ID if known",
+    "publisher": "Publisher (if book)",
+    "search_query": "optimized query for database verification"
+}
+
+IMPORTANT:
+- Use training knowledge to fill in details you recognize
+- Set confidence HIGH (0.8+) only if you're fairly sure
+- Never invent fictional works
+- Include search_query optimized for Crossref/PubMed lookup"""
+
+
+def lookup_fragment(
+    fragment: str,
+    gist: str = "",
+    verify: bool = True
+) -> Optional[SourceComponents]:
+    """
+    Look up a messy citation fragment using AI + database verification.
+    
+    This is the LAST RESORT after all upstream engines fail.
+    
+    Args:
+        fragment: Messy citation like "caplan trains brains"
+        gist: Document context/gist to improve accuracy
+        verify: If True, verify AI guess against databases (anti-hallucination)
+        
+    Returns:
+        SourceComponents if found AND verified, None otherwise
+        
+    Example:
+        >>> meta = lookup_fragment("caplan trains brains", 
+        ...     gist="history of psychiatry and psychoanalysis")
+        >>> print(meta.title)
+        "Trains, Brains, and Sprains: Railway Spine and the Origins of Psychoneuroses"
+    """
+    if not ACTIVE_CHAIN:
+        print("[AI_Lookup] No AI providers available")
+        return None
+    
+    print(f"[AI_Lookup] Fragment lookup: {fragment[:50]}...")
+    
+    # Build prompt with gist context
+    prompt = f"Citation fragment: {fragment}"
+    if gist:
+        prompt += f"\n\nDocument context: {gist}"
+    prompt += "\n\nIdentify the published work. JSON only."
+    
+    # Get AI's guess
+    response = _call_ai(prompt, FRAGMENT_SYSTEM, max_tokens=800)
+    guess = _parse_json_response(response)
+    
+    if not guess:
+        print("[AI_Lookup] AI returned no guess")
+        return None
+    
+    confidence = guess.get('confidence', 0)
+    title = guess.get('title', '')
+    
+    print(f"[AI_Lookup] AI guess: {title[:60]}... (confidence: {confidence})")
+    
+    if confidence < 0.3:
+        print("[AI_Lookup] Confidence too low, rejecting")
+        return None
+    
+    # Skip verification if disabled
+    if not verify:
+        return _guess_to_components(guess, fragment)
+    
+    # VERIFICATION: Confirm against databases
+    verified = _verify_against_databases(guess, fragment)
+    
+    if verified:
+        print(f"[AI_Lookup] ✓ Verified: {verified.title[:50]}...")
+        return verified
+    
+    # High-confidence guesses can pass without verification
+    if confidence >= 0.9 and title:
+        print("[AI_Lookup] High confidence, returning unverified")
+        meta = _guess_to_components(guess, fragment)
+        meta.source_engine = "AI Lookup (unverified)"
+        meta.confidence = confidence * 0.8  # Discount for no verification
+        return meta
+    
+    print("[AI_Lookup] Could not verify AI guess, rejecting as potential hallucination")
+    return None
+
+
+def _verify_against_databases(guess: dict, original_fragment: str) -> Optional[SourceComponents]:
+    """
+    Verify AI guess against free academic databases.
+    
+    Databases that couldn't find "caplan trains brains" CAN find
+    "Trains Brains Sprains Railway Spine Caplan 1995" because now
+    we have enough metadata for a precise match.
+    """
+    from engines.academic import CrossrefEngine, OpenAlexEngine, PubMedEngine
+    
+    title = guess.get('title', '')
+    authors = guess.get('authors', [])
+    year = guess.get('year', '')
+    doi = guess.get('doi', '')
+    pmid = guess.get('pmid', '')
+    search_query = guess.get('search_query', '')
+    
+    # Try direct ID lookups first (most reliable)
+    if doi:
+        try:
+            result = CrossrefEngine().get_by_id(doi)
+            if result and _result_matches_fragment(result, original_fragment):
+                print(f"[AI_Lookup] Verified via DOI: {doi}")
+                result.source_engine = "AI + Crossref (DOI verified)"
+                return result
+        except:
+            pass
+    
+    if pmid:
+        try:
+            result = PubMedEngine().get_by_id(pmid)
+            if result and _result_matches_fragment(result, original_fragment):
+                print(f"[AI_Lookup] Verified via PMID: {pmid}")
+                result.source_engine = "AI + PubMed (PMID verified)"
+                return result
+        except:
+            pass
+    
+    # Build verification queries from AI's metadata
+    queries = []
+    
+    if search_query:
+        queries.append(search_query)
+    
+    if title:
+        # Use title words + author surname
+        title_words = [w for w in title.split()[:5] if len(w) > 3]
+        author_surname = authors[0].split()[-1] if authors else ''
+        if title_words:
+            queries.append(' '.join(title_words) + (' ' + author_surname if author_surname else ''))
+    
+    if not queries:
+        return None
+    
+    # Try each query against each engine
+    engines = [
+        ('Crossref', CrossrefEngine()),
+        ('OpenAlex', OpenAlexEngine()),
+        ('PubMed', PubMedEngine()),
+    ]
+    
+    for query in queries[:2]:  # Limit attempts
+        for engine_name, engine in engines:
+            try:
+                result = engine.search(query)
+                if result and result.title and _result_matches_fragment(result, original_fragment):
+                    print(f"[AI_Lookup] Verified via {engine_name}")
+                    result.source_engine = f"AI + {engine_name} (verified)"
+                    return result
+            except:
+                continue
+    
+    return None
+
+
+def _result_matches_fragment(result: SourceComponents, fragment: str) -> bool:
+    """
+    Verify that a database result actually matches the original fragment.
+    
+    Prevents returning wrong results when AI guesses incorrectly.
+    E.g., "caplan trains brains" should not match an article about
+    "Brain Injury" even if author is named Caplan.
+    """
+    if not result or not result.title:
+        return False
+    
+    fragment_lower = fragment.lower()
+    title_lower = result.title.lower()
+    
+    # Common words to ignore
+    stop_words = {'the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to', 'for', 'by', 'with'}
+    
+    # Extract meaningful words from fragment
+    fragment_words = [w for w in fragment_lower.split()
+                      if len(w) >= 3 and w not in stop_words and not w.isdigit()]
+    
+    if not fragment_words:
+        return True  # Nothing to match
+    
+    # Build searchable text
+    searchable = title_lower
+    if result.authors:
+        searchable += ' ' + ' '.join(result.authors).lower()
+    
+    # Count matches
+    matches = sum(1 for word in fragment_words if word in searchable)
+    
+    # Require at least 2 matches (or all if < 2 words)
+    min_required = min(2, len(fragment_words))
+    word_match = matches >= min_required
+    
+    # Check year if present in fragment
+    year_match = True
+    year_in_fragment = re.search(r'\b(19|20)\d{2}\b', fragment)
+    if year_in_fragment and result.year:
+        year_match = year_in_fragment.group() == str(result.year)
+    
+    return word_match and year_match
+
+
+def _verify_url_components(ai_result: SourceComponents, url: str) -> Optional[SourceComponents]:
+    """
+    Verify AI-suggested URL metadata against academic databases.
+    
+    The AI cannot browse URLs, so it guesses based on URL patterns.
+    This function searches databases using the AI's suggested title/authors
+    and only returns a result if we find a matching entry.
+    
+    Args:
+        ai_result: The SourceComponents suggested by AI
+        url: The original URL (for reference)
+        
+    Returns:
+        Verified SourceComponents from database, or None if not found
+    """
+    from engines.academic import CrossrefEngine, OpenAlexEngine, PubMedEngine
+    
+    if not ai_result.title:
+        return None
+    
+    # Build search queries from AI's suggested metadata
+    queries = []
+    
+    # Query 1: Title words + first author surname
+    title_words = [w for w in ai_result.title.split()[:6] if len(w) > 3]
+    author_surname = ''
+    if ai_result.authors:
+        # Extract surname from "First Last" or "Last, First" format
+        first_author = ai_result.authors[0]
+        if ',' in first_author:
+            author_surname = first_author.split(',')[0].strip()
+        else:
+            author_surname = first_author.split()[-1] if first_author.split() else ''
+    
+    if title_words:
+        query = ' '.join(title_words)
+        if author_surname:
+            query += ' ' + author_surname
+        queries.append(query)
+    
+    # Query 2: Just title (broader search)
+    if ai_result.title:
+        queries.append(ai_result.title[:100])
+    
+    # Try each query against each engine
+    engines = [
+        ('Crossref', CrossrefEngine()),
+        ('OpenAlex', OpenAlexEngine()),
+    ]
+    
+    for query in queries[:2]:
+        for engine_name, engine in engines:
+            try:
+                result = engine.search(query)
+                if result and result.title:
+                    # Check if result matches AI's suggestion
+                    if _titles_match(result.title, ai_result.title):
+                        print(f"[AI_Lookup] Verified '{ai_result.title[:40]}...' via {engine_name}")
+                        return result
+            except Exception as e:
+                print(f"[AI_Lookup] {engine_name} search error: {e}")
+                continue
+    
+    return None
+
+
+def _titles_match(title1: str, title2: str) -> bool:
+    """
+    Check if two titles refer to the same work.
+    
+    Handles minor variations in punctuation, capitalization, subtitles.
+    """
+    if not title1 or not title2:
+        return False
+    
+    # Normalize: lowercase, remove punctuation, collapse whitespace
+    import re
+    
+    def normalize(t):
+        t = t.lower()
+        t = re.sub(r'[^\w\s]', ' ', t)  # Remove punctuation
+        t = ' '.join(t.split())  # Collapse whitespace
+        return t
+    
+    norm1 = normalize(title1)
+    norm2 = normalize(title2)
+    
+    # Exact match after normalization
+    if norm1 == norm2:
+        return True
+    
+    # One is substring of other (handles subtitle variations)
+    if norm1 in norm2 or norm2 in norm1:
+        return True
+    
+    # Word overlap: at least 60% of shorter title's words in longer
+    words1 = set(norm1.split())
+    words2 = set(norm2.split())
+    
+    # Remove very short words
+    words1 = {w for w in words1 if len(w) > 3}
+    words2 = {w for w in words2 if len(w) > 3}
+    
+    if not words1 or not words2:
+        return False
+    
+    overlap = len(words1 & words2)
+    min_words = min(len(words1), len(words2))
+    
+    return overlap >= min_words * 0.6
+
+
+def _verify_newspaper_consistency(result: SourceComponents, url: str) -> bool:
+    """
+    Basic consistency check for newspaper metadata.
+    
+    Newspapers are harder to verify in databases, so we do basic checks:
+    1. URL slug should relate to title
+    2. Domain should relate to publication name
+    
+    Args:
+        result: The SourceComponents from AI
+        url: The original URL
+        
+    Returns:
+        True if metadata passes consistency checks
+    """
+    from urllib.parse import urlparse
+    
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().replace('www.', '')
+        path = parsed.path.lower()
+        
+        # Extract slug from path (last meaningful segment)
+        slug_parts = [p for p in path.split('/') if p and len(p) > 3]
+        slug = slug_parts[-1] if slug_parts else ''
+        
+        # Remove common extensions and IDs
+        slug = re.sub(r'\.(html?|php|aspx?)$', '', slug)
+        slug = re.sub(r'[-_]', ' ', slug)
+        
+        # Check 1: Does title contain words from slug?
+        if result.title and slug:
+            title_lower = result.title.lower()
+            slug_words = [w for w in slug.split() if len(w) > 3]
+            
+            if slug_words:
+                matches = sum(1 for w in slug_words if w in title_lower)
+                # Require at least 1 word match or 30% overlap
+                if matches == 0 and len(slug_words) >= 3:
+                    print(f"[AI_Lookup] Title '{result.title[:40]}' doesn't match URL slug '{slug}'")
+                    return False
+        
+        # Check 2: Does publication match domain?
+        if result.newspaper:
+            pub_lower = result.newspaper.lower()
+            # Extract key parts of domain (e.g., 'nytimes' from 'nytimes.com')
+            domain_key = domain.split('.')[0]
+            
+            # Common mappings
+            domain_pub_map = {
+                'nytimes': 'new york times',
+                'washingtonpost': 'washington post',
+                'wsj': 'wall street journal',
+                'latimes': 'los angeles times',
+                'theatlantic': 'atlantic',
+                'newyorker': 'new yorker',
+                'economist': 'economist',
+                'theguardian': 'guardian',
+            }
+            
+            expected_pub = domain_pub_map.get(domain_key, domain_key)
+            
+            # Check if publication contains expected string
+            if expected_pub not in pub_lower and domain_key not in pub_lower:
+                # Not a hard failure - publication names vary
+                print(f"[AI_Lookup] Warning: Publication '{result.newspaper}' doesn't match domain '{domain}'")
+        
+        return True
+        
+    except Exception as e:
+        print(f"[AI_Lookup] Consistency check error: {e}")
+        return True  # Don't fail on parse errors
+
+
+def _guess_to_components(guess: dict, raw_source: str) -> SourceComponents:
+    """Convert AI guess dict to SourceComponents."""
+    type_map = {
+        'journal': CitationType.JOURNAL,
+        'book': CitationType.BOOK,
+        'legal': CitationType.LEGAL,
+        'newspaper': CitationType.NEWSPAPER,
+        'chapter': CitationType.BOOK,
+        'conference': CitationType.JOURNAL,
+    }
+    
+    # Parse authors into structured format
+    from models import parse_author_name
+    authors = guess.get('authors', [])
+    authors_parsed = [parse_author_name(a) for a in authors]
+    
+    return SourceComponents(
+        citation_type=type_map.get(guess.get('citation_type', '').lower(), CitationType.UNKNOWN),
+        raw_source=raw_source,
+        source_engine="AI Lookup",
+        title=guess.get('title', ''),
+        authors=authors,
+        authors_parsed=authors_parsed,
+        year=guess.get('year', ''),
+        journal=guess.get('journal', ''),
+        volume=guess.get('volume', ''),
+        issue=guess.get('issue', ''),
+        pages=guess.get('pages', ''),
+        doi=guess.get('doi', ''),
+        pmid=guess.get('pmid', ''),
+        publisher=guess.get('publisher', ''),
+        place=guess.get('place', ''),
+        confidence=guess.get('confidence', 0.5),
+    )
+
+
+def _dict_to_components(data: dict, original_authors: List[str], original_year: str) -> SourceComponents:
+    """Convert AI response dict to SourceComponents."""
+    type_map = {
+        'journal': CitationType.JOURNAL,
+        'book': CitationType.BOOK,
+        'chapter': CitationType.BOOK,
+        'conference': CitationType.JOURNAL,
+        'report': CitationType.GOVERNMENT,
+    }
+    
+    citation_type = type_map.get(data.get('citation_type', '').lower(), CitationType.UNKNOWN)
+    
+    authors = data.get('authors', [])
+    if not authors:
+        authors = original_authors
+    
+    # Parse authors into structured format
+    from models import parse_author_name
+    authors_parsed = [parse_author_name(a) for a in authors]
+    
+    return SourceComponents(
+        citation_type=citation_type,
+        raw_source=f"({', '.join(original_authors)}, {original_year})",
+        source_engine="AI Lookup",
+        title=data.get('title', ''),
+        authors=authors,
+        authors_parsed=authors_parsed,
+        year=data.get('year', original_year),
+        journal=data.get('journal', ''),
+        volume=data.get('volume', ''),
+        issue=data.get('issue', ''),
+        pages=data.get('pages', ''),
+        doi=data.get('doi', ''),
+        publisher=data.get('publisher', ''),
+        place=data.get('place', ''),
+        edition=data.get('edition', ''),
+        url=data.get('url', ''),
+        confidence=1.0 if data.get('confidence') == 'high' else 0.7 if data.get('confidence') == 'medium' else 0.5
+    )
+
+
+# =============================================================================
+# TESTING
+# =============================================================================
+
+if __name__ == "__main__":
+    print("=== AI Lookup Module Test ===")
+    print(f"Provider chain: {ACTIVE_CHAIN}")
+    
+    # Test classification
+    print("\n--- Classification Test ---")
+    ctype, meta = classify_citation("Eric Caplan, Mind Games")
+    print(f"Type: {ctype}, Title: {meta.title if meta else 'N/A'}")
+    
+    # Test parenthetical
+    print("\n--- Parenthetical Test ---")
+    if ACTIVE_CHAIN:
+        result = lookup_parenthetical_citation("(Simonton, 1992)", 
+            context="psychology article about creativity")
+        if result:
+            print(f"Found: {result.title}")
+        else:
+            print("Not found")
+    
+    # Test fragment lookup
+    print("\n--- Fragment Lookup Test ---")
+    if ACTIVE_CHAIN:
+        result = lookup_fragment("caplan trains brains",
+            gist="history of psychiatry")
+        if result:
+            print(f"Found: {result.title}")
+            print(f"Source: {result.source_engine}")
+        else:
+            print("Not found or rejected")
