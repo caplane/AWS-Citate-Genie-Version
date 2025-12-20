@@ -48,7 +48,7 @@ LOC_API_KEY = os.environ.get('LOC_API_KEY', '')  # Library of Congress API
 
 DEFAULT_TIMEOUT = 10  # seconds
 DEFAULT_HEADERS = {
-    'User-Agent': 'CiteFlex/2.0 (mailto:user@example.com)',
+    'User-Agent': 'CitateGenie/3.0 (mailto:eric@citategenie.com)',
     'Accept': 'application/json'
 }
 
