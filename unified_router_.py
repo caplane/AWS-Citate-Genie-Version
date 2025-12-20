@@ -1244,7 +1244,7 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
 # MULTIPLE RESULTS FUNCTION
 # =============================================================================
 
-def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -> List[Tuple[SourceComponents, str, str]]:
+def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, components_cache=None) -> List[Tuple[SourceComponents, str, str]]:
     """
     Get multiple citation candidates for user selection.
     
@@ -1252,6 +1252,9 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
     
     NEW (V3.4): If citation is already complete, returns parsed version first
     as "Original (Reformatted)" before database results.
+    
+    NEW (V4.2): Checks components_cache before API calls. If found, returns
+    cached result immediately (saves SerpAPI costs on duplicate citations).
     """
     query = query.strip()
     if not query:
@@ -1260,12 +1263,23 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
     formatter = get_formatter(style)
     results = []
     
+    # CHECK CACHE FIRST (new V4.2) - Skip all API calls if we have cached metadata
+    if components_cache is not None:
+        cached_components = components_cache.get(query)
+        if cached_components:
+            print(f"[UnifiedRouter] get_multiple_citations: Cache HIT for: {query[:40]}...")
+            formatted = formatter.format(cached_components)
+            return [(cached_components, formatted, "Cached")]
+    
     # TRY PARSING FIRST: If citation is complete, show reformatted version first
     parsed = parse_existing_citation(query)
     if parsed and _is_citation_complete(parsed):
         formatted = formatter.format(parsed)
         results.append((parsed, formatted, "Original (Reformatted)"))
         print(f"[UnifiedRouter] Parsed complete citation, added as first option")
+        # Store in cache for future duplicate lookups
+        if components_cache is not None:
+            components_cache.set(query, parsed)
     
     # Detect type
     detection = detect_type(query)
@@ -1431,8 +1445,8 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
             print(f"[UnifiedRouter] PubMed error: {e}")
         
         # Add Google Scholar results (paid, but excellent for fragments)
-        # ALWAYS search Google Scholar - don't skip based on result count!
-        if GOOGLE_SCHOLAR_AVAILABLE:
+        # Only search if free APIs returned < 2 results (cost optimization)
+        if GOOGLE_SCHOLAR_AVAILABLE and len(results) < 2:
             try:
                 gs_result = _google_scholar.search(query)
                 if gs_result:
@@ -1695,6 +1709,12 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
         for i, (meta, formatted, source) in enumerate(results[:limit]):
             title_short = meta.title[:40] if meta.title else 'NO TITLE'
             print(f"  #{i+1}: {meta.confidence:.1f} | {source} | {title_short}...")
+        
+        # Store best result in cache for future duplicate lookups (V4.2)
+        if components_cache is not None and results:
+            best_meta = results[0][0]
+            components_cache.set(query, best_meta)
+            print(f"[UnifiedRouter] Cached best result for: {query[:40]}...")
     
     return results[:limit]
 
@@ -1703,7 +1723,7 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6) -
 # MULTI-OPTION CITATIONS (uses Claude's get_citation_options)
 # =============================================================================
 
-def get_citation_options_formatted(query: str, style: str = "chicago", limit: int = 6) -> List[dict]:
+def get_citation_options_formatted(query: str, style: str = "chicago", limit: int = 6, components_cache=None) -> List[dict]:
     """
     Get multiple citation options from multiple APIs.
     
@@ -1717,9 +1737,11 @@ def get_citation_options_formatted(query: str, style: str = "chicago", limit: in
     - OpenAlex
     - Semantic Scholar
     - Famous Papers/Cases Cache
+    
+    NEW (V4.2): Accepts components_cache to avoid duplicate API calls.
     """
     # Use the existing multi-engine search
-    results = get_multiple_citations(query, style, limit)
+    results = get_multiple_citations(query, style, limit, components_cache)
     return [
         {
             "citation": formatted,
