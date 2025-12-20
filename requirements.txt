@@ -1,5 +1,5 @@
 # CitateGenie Requirements
-# Updated: 2025-12-10 - Reorganized codebase, added OpenAI
+# Updated: 2025-12-20 - Added database and auth dependencies
 
 # Web Framework
 flask>=2.3.0
@@ -23,6 +23,7 @@ google-generativeai>=0.3.0
 # Security/Encryption (for SOC 2 compliance)
 cryptography>=41.0.0
 
-# Procfile
-gunicorn==21.2.0
-
+# Database & Auth (for billing/library)
+sqlalchemy>=2.0.0
+flask-login>=0.6.0
+psycopg2-binary>=2.9.0
