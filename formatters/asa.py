@@ -65,14 +65,33 @@ class ASAFormatter(BaseFormatter):
         parts = []
         
         if metadata.authors:
-            last_name = self._get_last_name(metadata.authors[0])
-            if len(metadata.authors) == 2:
-                last_name2 = self._get_last_name(metadata.authors[1])
-                parts.append(f"{last_name} and {last_name2}")
-            elif len(metadata.authors) > 2:
-                parts.append(f"{last_name} et al.")
+            first_author = metadata.authors[0]
+            
+            # Check if organizational author - use full name
+            if self._is_organizational_author(first_author):
+                if len(metadata.authors) == 1:
+                    parts.append(first_author)
+                elif len(metadata.authors) == 2:
+                    second = metadata.authors[1]
+                    if self._is_organizational_author(second):
+                        parts.append(f"{first_author} and {second}")
+                    else:
+                        parts.append(f"{first_author} and {self._get_last_name(second)}")
+                else:
+                    parts.append(f"{first_author} et al.")
             else:
-                parts.append(last_name)
+                last_name = self._get_last_name(first_author)
+                if len(metadata.authors) == 2:
+                    second = metadata.authors[1]
+                    if self._is_organizational_author(second):
+                        last_name2 = second
+                    else:
+                        last_name2 = self._get_last_name(second)
+                    parts.append(f"{last_name} and {last_name2}")
+                elif len(metadata.authors) > 2:
+                    parts.append(f"{last_name} et al.")
+                else:
+                    parts.append(last_name)
         elif metadata.case_name:
             # Legal short form
             parts.append(f"<i>{metadata.case_name}</i>")
@@ -97,10 +116,16 @@ class ASAFormatter(BaseFormatter):
             return ""
         
         def format_first_author(name: str) -> str:
-            """First author: Last, First"""
-            parts = name.strip().split()
-            if len(parts) == 0:
+            """First author: Last, First (but orgs stay as-is)"""
+            name = name.strip()
+            if not name:
                 return ""
+            
+            # Check if organizational author - don't invert
+            if self._is_organizational_author(name):
+                return name
+            
+            parts = name.split()
             if len(parts) == 1:
                 return parts[0]
             
