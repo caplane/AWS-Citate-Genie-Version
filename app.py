@@ -1405,6 +1405,72 @@ def process_author_date():
         # Read file bytes
         file_bytes = file.read()
         
+        # =====================================================================
+        # FOOTNOTE/ENDNOTE DETECTION (Added 2025-12-20)
+        # If document has footnotes/endnotes, use the new processor that:
+        # 1. Extracts citations from notes (not just body text)
+        # 2. Removes superscripts from body
+        # 3. Inserts (Author, Date) at superscript locations  
+        # 4. Appends alphabetized References section
+        # =====================================================================
+        from processors.endnote_to_author_date import document_has_notes, process_endnotes_to_author_date
+        
+        if document_has_notes(file_bytes):
+            print(f"[API] Document has footnotes/endnotes - using endnote_to_author_date processor")
+            
+            try:
+                # Process using the new processor
+                result_bytes, citations = process_endnotes_to_author_date(file_bytes, style=style)
+                
+                # Create session for download
+                session_id = str(uuid.uuid4())[:8]
+                
+                # Store processed document
+                session_manager.store_session(session_id, {
+                    'original_filename': file.filename,
+                    'processed_bytes': result_bytes,
+                    'style': style,
+                    'mode': 'author-date-from-notes',
+                    'citation_count': len(citations),
+                    'is_preview': is_preview
+                })
+                
+                # Build response with citation info for UI
+                citation_list = []
+                for i, cite in enumerate(citations):
+                    citation_list.append({
+                        'id': i + 1,
+                        'original': cite.original_text[:100] + '...' if len(cite.original_text) > 100 else cite.original_text,
+                        'source': cite.source,
+                        'parenthetical': cite.parenthetical,
+                        'has_match': cite.components is not None,
+                        'accepted': True  # Auto-accepted since processor handles it
+                    })
+                
+                print(f"[API] Processed {len(citations)} citations from footnotes/endnotes")
+                
+                return jsonify({
+                    'success': True,
+                    'session_id': session_id,
+                    'mode': 'author-date-from-notes',
+                    'message': f'Converted {len(citations)} footnotes/endnotes to author-date format',
+                    'citations': citation_list,
+                    'ready_for_download': True,
+                    'is_preview': is_preview
+                })
+                
+            except Exception as e:
+                print(f"[API] Error in endnote_to_author_date processor: {e}")
+                import traceback
+                traceback.print_exc()
+                # Fall through to standard processing if new processor fails
+                print("[API] Falling back to standard author-date processing")
+        
+        # =====================================================================
+        # STANDARD AUTHOR-DATE PROCESSING (body text only)
+        # Used when document has no footnotes/endnotes, or as fallback
+        # =====================================================================
+        
         # Extract document topics for AI context (improves accuracy)
         document_context = get_document_context(file_bytes)
         print(f"[API] Document context: {document_context[:100]}..." if document_context else "[API] No document context extracted")
