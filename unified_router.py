@@ -720,6 +720,91 @@ def _parse_authors(author_str: str) -> list:
     return [author_str]
 
 
+def _split_compound_citation(query: str) -> List[str]:
+    """
+    Split a compound citation into individual citation parts.
+    
+    Handles citations like:
+    - "Freud 1900; Jung 1912; Adler 1927"
+    - "See Smith (2020); Jones (2021); Brown (2022)"
+    - "Compare Doe, Title One (2020); Roe, Title Two (2021)"
+    
+    Does NOT split if:
+    - Semicolon appears inside parentheses (e.g., "(Vol. 1; No. 2)")
+    - Semicolon appears inside quotes
+    - Only one part would result (not actually compound)
+    - Parts don't look like citations (too short, no year/author patterns)
+    
+    Args:
+        query: The citation text that may contain multiple sources
+        
+    Returns:
+        List of citation parts. Returns [query] if not compound.
+    """
+    # Don't split if no semicolon
+    if ';' not in query:
+        return [query]
+    
+    # Remove leading citation signals for analysis
+    working = query.strip()
+    for prefix in ['See ', 'See also ', 'Cf. ', 'cf. ', 'Compare ', 'E.g., ', 'e.g., ']:
+        if working.startswith(prefix):
+            working = working[len(prefix):]
+            break
+    
+    # Split on semicolons, but track parentheses/quote depth
+    parts = []
+    current = ""
+    paren_depth = 0
+    in_quotes = False
+    
+    for i, char in enumerate(working):
+        if char == '"' or char == "'":
+            # Simple quote toggle (doesn't handle nested quotes)
+            in_quotes = not in_quotes
+            current += char
+        elif char == '(':
+            paren_depth += 1
+            current += char
+        elif char == ')':
+            paren_depth = max(0, paren_depth - 1)
+            current += char
+        elif char == ';' and paren_depth == 0 and not in_quotes:
+            # This is a splitting semicolon
+            if current.strip():
+                parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    
+    # Don't forget the last part
+    if current.strip():
+        parts.append(current.strip())
+    
+    # Validate: each part should look like a citation
+    # (has a year pattern OR has enough substance)
+    year_pattern = re.compile(r'\b(1[89]\d{2}|20[0-2]\d)\b')  # 1800-2029
+    valid_parts = []
+    
+    for part in parts:
+        part = part.strip().rstrip('.,;')
+        if not part:
+            continue
+        # Accept if: has a year, OR is long enough to be a citation (>15 chars)
+        if year_pattern.search(part) or len(part) > 15:
+            valid_parts.append(part)
+        else:
+            # Too short and no year - might be fragment, skip splitting
+            print(f"[UnifiedRouter] Compound split: rejecting part '{part}' (no year, too short)")
+            return [query]  # Return original unsplit
+    
+    # Only return split parts if we got multiple valid ones
+    if len(valid_parts) > 1:
+        return valid_parts
+    
+    return [query]
+
+
 def _is_citation_complete(meta: SourceComponents) -> bool:
     """
     Check if parsed citation has enough data to skip database search.
@@ -1171,6 +1256,12 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
     
     NEW (V4.1): Checks components_cache before any API calls. If citation is found
     in cache, returns cached metadata immediately (skips all lookups).
+    
+    NEW (V4.3): URL-priority rule - if citation contains a URL, use ONLY the URL
+    for metadata extraction. Skips text parsing/searching (cost optimization).
+    
+    NEW (V4.3): Compound citation splitting - if citation contains semicolons
+    separating distinct sources, split and process each independently.
     """
     query = query.strip()
     if not query:
@@ -1186,6 +1277,68 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
         if cached_components:
             print(f"[UnifiedRouter] Using cached metadata for: {query[:40]}...")
             return cached_components, formatter.format(cached_components)
+    
+    # =========================================================================
+    # RULE 1: URL-PRIORITY (V4.3)
+    # If citation contains a URL, extract it and route ONLY via URL engines.
+    # Skip all text parsing/searching - the URL is the authoritative source.
+    # This saves cost (no SerpAPI searches on surrounding text).
+    # =========================================================================
+    url_match = re.search(r'https?://[^\s,\)]+', query)
+    if url_match:
+        url = url_match.group(0).rstrip('.,;:')
+        print(f"[UnifiedRouter] URL-priority rule: extracting URL only: {url[:60]}...")
+        components = _route_url(url)
+        if components:
+            # Store in cache if available
+            if components_cache is not None:
+                components_cache.set(query, components)
+            return components, formatter.format(components)
+        # If URL routing failed, fall through to normal processing
+        print(f"[UnifiedRouter] URL routing failed, falling back to text parsing")
+    
+    # =========================================================================
+    # RULE 2: COMPOUND CITATION SPLITTING (V4.3)
+    # If citation contains semicolons separating distinct sources, split them,
+    # process each independently, then rejoin with semicolons.
+    # Skip if: URL present (handled above), or semicolon is inside parentheses,
+    # or looks like a single citation with internal semicolon (e.g., journal;vol)
+    # =========================================================================
+    if ';' in query and not url_match:
+        # Split on semicolons, but be smart about it
+        parts = _split_compound_citation(query)
+        if len(parts) > 1:
+            print(f"[UnifiedRouter] Compound citation: splitting into {len(parts)} parts")
+            formatted_parts = []
+            all_components = []
+            
+            for i, part in enumerate(parts):
+                part = part.strip()
+                if not part:
+                    continue
+                print(f"[UnifiedRouter]   Part {i+1}: {part[:50]}...")
+                
+                # Recursively process each part (benefits from cache)
+                part_components, part_formatted = route_citation(
+                    part, style, context, components_cache
+                )
+                
+                if part_formatted:
+                    formatted_parts.append(part_formatted)
+                    if part_components:
+                        all_components.append(part_components)
+                else:
+                    # Couldn't process this part - keep original text
+                    formatted_parts.append(part)
+            
+            if formatted_parts:
+                # Rejoin with semicolons
+                combined_formatted = "; ".join(formatted_parts)
+                # Return first component as representative (for metadata purposes)
+                # The formatted string contains all citations
+                representative = all_components[0] if all_components else None
+                print(f"[UnifiedRouter] Compound citation result: {combined_formatted[:80]}...")
+                return representative, combined_formatted
     
     # 0. TRY PARSING FIRST: If citation is already complete, just reformat
     # This preserves user's authoritative content while applying style
