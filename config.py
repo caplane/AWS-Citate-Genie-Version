@@ -35,6 +35,8 @@ if not _raw_openai:
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 COURTLISTENER_API_KEY = os.environ.get('CL_API_KEY', '')
 PUBMED_API_KEY = os.environ.get('PUBMED_API_KEY', '')
+OPENALEX_API_KEY = os.environ.get('OPENALEX_API_KEY', '')  # Use email as key for polite pool
+GOOGLE_BOOKS_API_KEY = os.environ.get('GOOGLE_BOOKS_API_KEY', '')
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get('SEMANTIC_SCHOLAR_API_KEY', '')
 GOOGLE_CSE_API_KEY = os.environ.get('GOOGLE_CSE_API_KEY', '')
 GOOGLE_CSE_ID = os.environ.get('GOOGLE_CSE_ID', '')
