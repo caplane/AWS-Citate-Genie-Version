@@ -165,15 +165,19 @@ class SmartURLRouter:
     
     def _empty_metadata(self, url: str):
         """Return empty metadata to trigger GenericURL fallback."""
-        return type('Metadata', (), {
-            'title': None,
-            'authors': [],
-            'publication': None,
-            'date': None,
-            'url': url,
-            'method_used': 'none',
-            'is_complete': lambda: False
-        })()
+        class EmptyMetadata:
+            def __init__(self):
+                self.title = None
+                self.authors = []
+                self.publication = None
+                self.date = None
+                self.url = url
+                self.method_used = 'none'
+            
+            def is_complete(self):
+                return False
+        
+        return EmptyMetadata()
     
     def _extract_domain(self, url: str) -> str:
         """Extract clean domain from URL."""
