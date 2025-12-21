@@ -53,7 +53,7 @@ from unified_router import get_citation, get_multiple_citations, get_parenthetic
 from formatters.base import get_formatter
 from document_processor import process_document
 from processors.topic_extractor import get_document_context
-from processors.document_metadata import export_cache_to_csv
+from processors.document_components import export_cache_to_csv
 
 # Billing system imports
 from billing import (
