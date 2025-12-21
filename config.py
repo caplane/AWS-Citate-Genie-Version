@@ -44,6 +44,10 @@ SERPAPI_KEY = os.environ.get('SERPAPI_KEY', '')
 BRAVE_API_KEY = os.environ.get('BRAVE_API_KEY', '')  # For fast URL citation lookup
 LOC_API_KEY = os.environ.get('LOC_API_KEY', '')  # Library of Congress API
 
+# News API Keys (for waterfall resolver - free tiers)
+THENEWSAPI_KEY = os.environ.get('THENEWSAPI_KEY', '')  # The News API - Free: 100 calls/day
+NEWSDATA_KEY = os.environ.get('NEWSDATA_KEY', '')      # NewsData.io - Free: 200 calls/day
+
 # =============================================================================
 # HTTP SETTINGS
 # =============================================================================
