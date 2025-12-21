@@ -49,10 +49,7 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, send_file
 from werkzeug.utils import secure_filename
 
-# Document logger for per-document cost tracking
-from document_logger import DocumentLogger, log_from_source_components
-
-from unified_router import get_citation, get_multiple_citations, get_parenthetical_options, get_parenthetical_metadata
+from unified_router import get_citation, get_multiple_citations, get_parenthetical_options, get_parenthetical_components
 from formatters.base import get_formatter
 from document_processor import process_document
 from processors.topic_extractor import get_document_context
@@ -793,22 +790,7 @@ def process_doc():
         
         # Start tracking costs for this document
         from cost_tracker import start_document_tracking
-        doc_session_id = str(uuid.uuid4())[:8]  # Short unique ID for this processing session
-        start_document_tracking(
-            session_id=doc_session_id,
-            filename=file.filename,
-            style=request.form.get('style', 'Chicago Manual of Style'),
-            is_preview=is_preview
-        )
-        
-        # Initialize document logger for detailed per-citation tracking
-        user_id = current_user.id if is_authenticated else None
-        doc_logger = DocumentLogger(
-            session_id=doc_session_id,
-            filename=file.filename,
-            user_id=user_id
-        )
-        print(f"[API] DocumentLogger initialized for session {doc_session_id}")
+        start_document_tracking(file.filename)
         
         style = request.form.get('style', 'Chicago Manual of Style')
         add_links = request.form.get('add_links', 'true').lower() == 'true'
@@ -820,15 +802,8 @@ def process_doc():
         processed_bytes, results, metadata_cache = process_document(
             file_bytes,
             style=style,
-            add_links=add_links,
-            doc_logger=doc_logger  # Pass logger for per-citation tracking
+            add_links=add_links
         )
-        
-        # Save document processing log
-        log_path = doc_logger.save()
-        log_summary = doc_logger.get_summary()
-        print(f"[API] Document log saved: {log_path}")
-        print(f"[API] Total cost: ${log_summary['total_cost']:.4f}, Success rate: {log_summary['success_rate']:.1f}%")
         
         # Record preview usage for rate limiting
         if is_preview:
@@ -859,8 +834,6 @@ def process_doc():
             for idx, r in enumerate(results)
         ])
         sessions.set(session_id, 'filename', secure_filename(file.filename))
-        sessions.set(session_id, 'log_path', log_path)  # Document processing log
-        sessions.set(session_id, 'cost_summary', log_summary)  # Cost tracking summary
         
         print(f"[API] Session {session_id[:8]} initialized with {len(results)} notes, doc size={len(processed_bytes)}")
         print(f"[API] Total active sessions: {len(sessions._sessions)}")
@@ -886,12 +859,7 @@ def process_doc():
         
         # Finish tracking costs and send email
         from cost_tracker import finish_document_tracking
-        doc_cost_summary = finish_document_tracking(
-            citations_found=len(results),
-            citations_resolved=success_count,
-            citations_failed=len(results) - success_count,
-            status='completed'
-        )
+        doc_cost_summary = finish_document_tracking()
         
         # Get remaining previews for unauthenticated users
         remaining_previews = None
@@ -1482,7 +1450,7 @@ def process_author_date():
             
             try:
                 # Get raw metadata (no formatting yet) - pass document context for better accuracy
-                metadata_list = get_parenthetical_metadata(original_text, limit=4, context=document_context)
+                metadata_list = get_parenthetical_components(original_text, limit=4, context=document_context)
                 
                 # Build options with raw metadata
                 options = [{
