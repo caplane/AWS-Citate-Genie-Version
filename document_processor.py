@@ -1110,7 +1110,8 @@ class LinkActivator:
 def process_document(
     file_bytes: bytes,
     style: str = "Chicago Manual of Style",
-    add_links: bool = True
+    add_links: bool = True,
+    doc_logger = None
 ) -> tuple:
     """
     Process all citations in a Word document.
@@ -1124,11 +1125,13 @@ def process_document(
     - Explicit ibid references (user typed "ibid" or "ibid., 45")
     - Repetitive URLs (same URL as previous note → ibid)
     - Embedded metadata cache for repeated processing (V4.1)
+    - Per-citation logging with doc_logger (V4.4)
     
     Args:
         file_bytes: The document as bytes
         style: Citation style to use
         add_links: Whether to make URLs clickable
+        doc_logger: Optional DocumentLogger for per-citation cost tracking
         
     Returns:
         Tuple of (processed_document_bytes, results_list, metadata_cache)
@@ -1355,6 +1358,17 @@ def process_document(
         result = process_single_note(note, 'endnote')
         results.append(result)
         print(f"[process_document] Endnote {idx+1} {'✔' if result.success else '✗'}")
+        
+        # Log to document logger if available
+        if doc_logger and result.metadata:
+            from document_logger import log_from_source_components
+            log_from_source_components(doc_logger, note.get('text', ''), result.metadata)
+        elif doc_logger:
+            doc_logger.log_citation(
+                query=note.get('text', ''),
+                source='unknown',
+                success=False
+            )
     
     # Process footnotes
     for idx, note in enumerate(footnotes):
@@ -1362,6 +1376,17 @@ def process_document(
         result = process_single_note(note, 'footnote')
         results.append(result)
         print(f"[process_document] Footnote {idx+1} {'✔' if result.success else '✗'}")
+        
+        # Log to document logger if available
+        if doc_logger and result.metadata:
+            from document_logger import log_from_source_components
+            log_from_source_components(doc_logger, note.get('text', ''), result.metadata)
+        elif doc_logger:
+            doc_logger.log_citation(
+                query=note.get('text', ''),
+                source='unknown',
+                success=False
+            )
     
     # Save to buffer
     doc_buffer = processor.save_to_buffer()

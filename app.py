@@ -52,15 +52,15 @@ from werkzeug.utils import secure_filename
 # Document logger for per-document cost tracking
 from document_logger import DocumentLogger, log_from_source_components
 
-from unified_router import get_citation, get_multiple_citations, get_parenthetical_options, get_parenthetical_components
+from unified_router import get_citation, get_multiple_citations, get_parenthetical_options, get_parenthetical_metadata
 from formatters.base import get_formatter
 from document_processor import process_document
 from processors.topic_extractor import get_document_context
-from processors.document_components import export_cache_to_csv
+from processors.document_metadata import export_cache_to_csv
 
 # Billing system imports
 from billing import (
-    init_billing, billing_bp, admin_bp,
+    init_billing, billing_bp, 
     requires_credits, spend_user_credit,
     get_balance_fast, has_credits
 )
@@ -79,9 +79,6 @@ init_billing(app)
 
 # Register billing routes (/billing/*)
 app.register_blueprint(billing_bp)
-
-# Register admin routes (/admin/*)
-app.register_blueprint(admin_bp)
 
 ALLOWED_EXTENSIONS = {'docx'}
 
@@ -412,7 +409,7 @@ def cite():
     {
         "success": true,
         "citation": "formatted citation",
-        "components": {...}
+        "metadata": {...}
     }
     """
     try:
@@ -427,7 +424,7 @@ def cite():
         query = data['query'].strip()
         style = data.get('style', 'Chicago Manual of Style')
         
-        components, formatted = get_citation(query, style)
+        metadata, formatted = get_citation(query, style)
         
         if not formatted:
             return jsonify({
@@ -441,18 +438,18 @@ def cite():
         source = 'unified'
         confidence = 'medium'
         
-        if components:
-            citation_type = components.citation_type.name.lower() if components.citation_type else 'unknown'
+        if metadata:
+            citation_type = metadata.citation_type.name.lower() if metadata.citation_type else 'unknown'
             # Determine source based on type and metadata
             if citation_type == 'legal':
-                source = 'cache' if components.citation else 'courtlistener'
-                confidence = 'high' if components.citation else 'medium'
+                source = 'cache' if metadata.citation else 'courtlistener'
+                confidence = 'high' if metadata.citation else 'medium'
             elif citation_type in ['journal', 'medical']:
                 source = 'crossref/openalex'
-                confidence = 'high' if components.doi else 'medium'
+                confidence = 'high' if metadata.doi else 'medium'
             elif citation_type == 'book':
                 source = 'openlibrary/googlebooks'
-                confidence = 'high' if components.isbn else 'medium'
+                confidence = 'high' if metadata.isbn else 'medium'
             else:
                 source = 'unified'
         
@@ -489,7 +486,7 @@ def cite_multiple():
     {
         "success": true,
         "results": [
-            {"citation": "...", "components": {...}},
+            {"citation": "...", "metadata": {...}},
             ...
         ]
     }
@@ -635,13 +632,13 @@ def cite_parenthetical():
 @app.route('/api/format-citation', methods=['POST'])
 def format_citation():
     """
-    Format a citation from raw source components.
+    Format a citation from raw metadata.
     
     Called when user clicks Accept & Save - this is when formatting happens.
     
     Request JSON:
     {
-        "components": {
+        "metadata": {
             "title": "The Social Context of Genius",
             "authors": ["Simonton, Dean Keith"],
             "year": "1992",
@@ -667,7 +664,7 @@ def format_citation():
         if not data or not data.get('metadata'):
             return jsonify({
                 'success': False,
-                'error': 'Missing source components'
+                'error': 'Missing metadata'
             }), 400
         
         meta_dict = data['metadata']
@@ -681,8 +678,8 @@ def format_citation():
                 'formatted': meta_dict.get('title', '')  # title holds original text for this case
             })
         
-        # Convert dict to SourceComponents
-        from models import SourceComponents, CitationType
+        # Convert dict to CitationMetadata
+        from models import CitationMetadata, CitationType
         
         # Map citation_type string to enum
         type_map = {
@@ -703,7 +700,7 @@ def format_citation():
             CitationType.UNKNOWN
         )
         
-        components = SourceComponents(
+        metadata = CitationMetadata(
             citation_type=citation_type,
             title=meta_dict.get('title', ''),
             authors=meta_dict.get('authors', []),
@@ -721,7 +718,7 @@ def format_citation():
         
         # Get formatter and format
         formatter = get_formatter(style)
-        formatted = formatter.format(components)
+        formatted = formatter.format(metadata)
         
         return jsonify({
             'success': True,
@@ -796,7 +793,6 @@ def process_doc():
         
         # Start tracking costs for this document
         from cost_tracker import start_document_tracking
-        import uuid
         doc_session_id = str(uuid.uuid4())[:8]  # Short unique ID for this processing session
         start_document_tracking(
             session_id=doc_session_id,
@@ -821,7 +817,7 @@ def process_doc():
         file_bytes = file.read()
         
         # Process document (returns bytes, results, and metadata cache)
-        processed_bytes, results, components_cache = process_document(
+        processed_bytes, results, metadata_cache = process_document(
             file_bytes,
             style=style,
             add_links=add_links,
@@ -848,7 +844,7 @@ def process_doc():
         sessions.set(session_id, 'processed_doc', processed_bytes)
         sessions.set(session_id, 'original_bytes', file_bytes)  # Store original for re-processing
         sessions.set(session_id, 'style', style)
-        sessions.set(session_id, 'components_cache', components_cache)  # Store cache for CSV export
+        sessions.set(session_id, 'metadata_cache', metadata_cache)  # Store cache for CSV export
         sessions.set(session_id, 'is_preview', is_preview)  # Track preview status
         sessions.set(session_id, 'results', [
             {
@@ -887,14 +883,13 @@ def process_doc():
         
         # Return summary with notes for workbench UI
         success_count = sum(1 for r in results if r.success)
-        failed_count = len(results) - success_count
         
         # Finish tracking costs and send email
         from cost_tracker import finish_document_tracking
         doc_cost_summary = finish_document_tracking(
             citations_found=len(results),
             citations_resolved=success_count,
-            citations_failed=failed_count,
+            citations_failed=len(results) - success_count,
             status='completed'
         )
         
@@ -919,7 +914,7 @@ def process_doc():
                 'ibid': sum(1 for r in results if r.citation_form == 'ibid'),
                 'short': sum(1 for r in results if r.citation_form == 'short'),
                 'full': sum(1 for r in results if r.citation_form == 'full'),
-                'cached_citations': components_cache.size(),  # Total cached (old + new)
+                'cached_citations': metadata_cache.size(),  # Total cached (old + new)
             },
             'cost': doc_cost_summary,  # Include cost info in response
         })
@@ -1017,8 +1012,8 @@ def download(session_id: str):
         }), 500
 
 
-@app.route('/api/export-components/<session_id>')
-def export_components(session_id: str):
+@app.route('/api/export-metadata/<session_id>')
+def export_metadata(session_id: str):
     """
     Export citation metadata as CSV file.
     
@@ -1028,7 +1023,7 @@ def export_components(session_id: str):
     Added: 2025-12-14 (V4.1 - Embedded Metadata Cache)
     Updated: 2025-12-14 (V4.2 - Support author-date mode)
     """
-    print(f"[API] export-components called for session {session_id[:8]}...")
+    print(f"[API] export-metadata called for session {session_id[:8]}...")
     
     try:
         session_data = sessions.get(session_id)
@@ -1164,23 +1159,23 @@ def export_components(session_id: str):
             print(f"[API] Author-date CSV content length: {len(csv_content)} chars")
             
         else:
-            # Footnote mode - use existing components_cache logic
-            components_cache = session_data.get('components_cache')
-            print(f"[API] components_cache exists: {components_cache is not None}")
-            print(f"[API] components_cache type: {type(components_cache)}")
+            # Footnote mode - use existing metadata_cache logic
+            metadata_cache = session_data.get('metadata_cache')
+            print(f"[API] metadata_cache exists: {metadata_cache is not None}")
+            print(f"[API] metadata_cache type: {type(metadata_cache)}")
             
-            if not components_cache:
-                print(f"[API] No components_cache in session")
+            if not metadata_cache:
+                print(f"[API] No metadata_cache in session")
                 return jsonify({
                     'success': False,
                     'error': 'No metadata cache found for this session'
                 }), 404
             
-            cache_size = components_cache.size()
-            print(f"[API] components_cache size: {cache_size}")
+            cache_size = metadata_cache.size()
+            print(f"[API] metadata_cache size: {cache_size}")
             
             if cache_size == 0:
-                print(f"[API] components_cache is empty")
+                print(f"[API] metadata_cache is empty")
                 return jsonify({
                     'success': False,
                     'error': 'Metadata cache is empty'
@@ -1188,7 +1183,7 @@ def export_components(session_id: str):
             
             # Generate CSV
             print(f"[API] Generating CSV...")
-            csv_content = export_cache_to_csv(components_cache)
+            csv_content = export_cache_to_csv(metadata_cache)
             print(f"[API] CSV content length: {len(csv_content)} chars")
         
         # Get filename for export
@@ -1210,7 +1205,7 @@ def export_components(session_id: str):
         
     except Exception as e:
         import traceback
-        print(f"[API] Error in /api/export-components: {e}")
+        print(f"[API] Error in /api/export-metadata: {e}")
         print(f"[API] Traceback: {traceback.format_exc()}")
         return jsonify({
             'success': False,
@@ -1442,72 +1437,6 @@ def process_author_date():
         # Read file bytes
         file_bytes = file.read()
         
-        # =====================================================================
-        # FOOTNOTE/ENDNOTE DETECTION (Added 2025-12-20)
-        # If document has footnotes/endnotes, use the new processor that:
-        # 1. Extracts citations from notes (not just body text)
-        # 2. Removes superscripts from body
-        # 3. Inserts (Author, Date) at superscript locations  
-        # 4. Appends alphabetized References section
-        # =====================================================================
-        from processors.endnote_to_author_date import document_has_notes, process_endnotes_to_author_date
-        
-        if document_has_notes(file_bytes):
-            print(f"[API] Document has footnotes/endnotes - using endnote_to_author_date processor")
-            
-            try:
-                # Process using the new processor
-                result_bytes, citations = process_endnotes_to_author_date(file_bytes, style=style)
-                
-                # Create session for download
-                session_id = str(uuid.uuid4())[:8]
-                
-                # Store processed document
-                session_manager.store_session(session_id, {
-                    'original_filename': file.filename,
-                    'processed_bytes': result_bytes,
-                    'style': style,
-                    'mode': 'author-date-from-notes',
-                    'citation_count': len(citations),
-                    'is_preview': is_preview
-                })
-                
-                # Build response with citation info for UI
-                citation_list = []
-                for i, cite in enumerate(citations):
-                    citation_list.append({
-                        'id': i + 1,
-                        'original': cite.original_text[:100] + '...' if len(cite.original_text) > 100 else cite.original_text,
-                        'source': cite.source,
-                        'parenthetical': cite.parenthetical,
-                        'has_match': cite.components is not None,
-                        'accepted': True  # Auto-accepted since processor handles it
-                    })
-                
-                print(f"[API] Processed {len(citations)} citations from footnotes/endnotes")
-                
-                return jsonify({
-                    'success': True,
-                    'session_id': session_id,
-                    'mode': 'author-date-from-notes',
-                    'message': f'Converted {len(citations)} footnotes/endnotes to author-date format',
-                    'citations': citation_list,
-                    'ready_for_download': True,
-                    'is_preview': is_preview
-                })
-                
-            except Exception as e:
-                print(f"[API] Error in endnote_to_author_date processor: {e}")
-                import traceback
-                traceback.print_exc()
-                # Fall through to standard processing if new processor fails
-                print("[API] Falling back to standard author-date processing")
-        
-        # =====================================================================
-        # STANDARD AUTHOR-DATE PROCESSING (body text only)
-        # Used when document has no footnotes/endnotes, or as fallback
-        # =====================================================================
-        
         # Extract document topics for AI context (improves accuracy)
         document_context = get_document_context(file_bytes)
         print(f"[API] Document context: {document_context[:100]}..." if document_context else "[API] No document context extracted")
@@ -1553,7 +1482,7 @@ def process_author_date():
             
             try:
                 # Get raw metadata (no formatting yet) - pass document context for better accuracy
-                components_list = get_parenthetical_components(original_text, limit=4, context=document_context)
+                metadata_list = get_parenthetical_metadata(original_text, limit=4, context=document_context)
                 
                 # Build options with raw metadata
                 options = [{
@@ -1573,7 +1502,7 @@ def process_author_date():
                     'is_original': True
                 }]
                 
-                for opt_idx, meta in enumerate(components_list):
+                for opt_idx, meta in enumerate(metadata_list):
                     options.append({
                         'id': opt_idx + 1,
                         'title': meta.title if meta else '',
@@ -1593,11 +1522,11 @@ def process_author_date():
                 
                 # Pre-format the recommended option (first AI result) for immediate display
                 formatted_recommendation = None
-                if len(options) > 1 and len(components_list) > 0:
+                if len(options) > 1 and len(metadata_list) > 0:
                     try:
                         from formatters.base import get_formatter
                         formatter = get_formatter(style)
-                        formatted_recommendation = formatter.format(components_list[0])
+                        formatted_recommendation = formatter.format(metadata_list[0])
                     except Exception as fmt_err:
                         print(f"[API] Error pre-formatting recommendation: {fmt_err}")
                 
@@ -1674,26 +1603,26 @@ def process_author_date():
                 author_parsed = parse_author_name(author_parsed)
             return author_parsed.get('family', 'Unknown')
         
-        def build_parenthetical(components):
+        def build_parenthetical(metadata):
             """
             Build parenthetical citation from metadata using authors_parsed.
             
             Uses structured author data when available for accurate surnames.
             Falls back to parsing author strings if authors_parsed is empty.
             """
-            year = components.year or 'n.d.'
+            year = metadata.year or 'n.d.'
             
             # Prefer authors_parsed (structured data)
-            authors_parsed = getattr(components, 'authors_parsed', []) or []
+            authors_parsed = getattr(metadata, 'authors_parsed', []) or []
             
             # Fallback: parse from authors strings
-            if not authors_parsed and components.authors:
+            if not authors_parsed and metadata.authors:
                 from models import parse_author_name
-                authors_parsed = [parse_author_name(a) for a in components.authors]
+                authors_parsed = [parse_author_name(a) for a in metadata.authors]
             
             if not authors_parsed:
                 # No authors - use title
-                title = components.title or 'Unknown'
+                title = metadata.title or 'Unknown'
                 title_short = (title[:30] + '...') if len(title) > 33 else title
                 return f"({title_short}, {year})"
             
@@ -1722,13 +1651,13 @@ def process_author_date():
             try:
                 # Use the unified router to get metadata for the URL
                 from unified_router import get_citation
-                components, formatted = get_citation(url, style)
+                metadata, formatted = get_citation(url, style)
                 
-                if components:
+                if metadata:
                     # Build parenthetical using structured author data
-                    parenthetical = build_parenthetical(components)
-                    authors = components.authors if components.authors else []
-                    year = components.year or ''
+                    parenthetical = build_parenthetical(metadata)
+                    authors = metadata.authors if metadata.authors else []
+                    year = metadata.year or ''
                     
                     options = [{
                         'id': 0,
@@ -1748,19 +1677,19 @@ def process_author_date():
                         'is_original': True
                     }, {
                         'id': 1,
-                        'title': components.title or '',
+                        'title': metadata.title or '',
                         'authors': authors,
-                        'authors_parsed': getattr(components, 'authors_parsed', []) or [],
+                        'authors_parsed': getattr(metadata, 'authors_parsed', []) or [],
                         'year': year,
-                        'journal': getattr(components, 'journal', '') or '',
-                        'publisher': getattr(components, 'publisher', '') or '',
-                        'volume': getattr(components, 'volume', '') or '',
-                        'issue': getattr(components, 'issue', '') or '',
-                        'pages': getattr(components, 'pages', '') or '',
-                        'doi': getattr(components, 'doi', '') or '',
-                        'url': getattr(components, 'url', url) or url,
-                        'citation_type': components.citation_type.name.lower() if components.citation_type else 'url',
-                        'source': getattr(components, 'source_engine', 'ai_lookup'),
+                        'journal': getattr(metadata, 'journal', '') or '',
+                        'publisher': getattr(metadata, 'publisher', '') or '',
+                        'volume': getattr(metadata, 'volume', '') or '',
+                        'issue': getattr(metadata, 'issue', '') or '',
+                        'pages': getattr(metadata, 'pages', '') or '',
+                        'doi': getattr(metadata, 'doi', '') or '',
+                        'url': getattr(metadata, 'url', url) or url,
+                        'citation_type': metadata.citation_type.name.lower() if metadata.citation_type else 'url',
+                        'source': getattr(metadata, 'source_engine', 'ai_lookup'),
                         'is_original': False,
                         'parenthetical': parenthetical  # The in-text citation to use
                     }]
@@ -1994,7 +1923,7 @@ def accept_reference():
                 option = data['option']
                 
                 # Look up the citation from session results to get original text
-                # This is needed for components_cache update and Word doc update
+                # This is needed for metadata_cache update and Word doc update
                 results = session_data.get('results', [])
                 citation = None
                 # Ensure citation_id is comparable (handle both int and string)
@@ -2016,7 +1945,7 @@ def accept_reference():
                     reference_id = citation_id
                 else:
                     # Format from metadata
-                    from models import SourceComponents, CitationType
+                    from models import CitationMetadata, CitationType
                     
                     type_str = option.get('citation_type', 'unknown').lower()
                     type_map = {
@@ -2030,7 +1959,7 @@ def accept_reference():
                     }
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
-                    components = SourceComponents(
+                    metadata = CitationMetadata(
                         citation_type=citation_type,
                         title=option.get('title', ''),
                         authors=option.get('authors', []),
@@ -2049,7 +1978,7 @@ def accept_reference():
                     )
                     
                     formatter = get_formatter(style)
-                    formatted = formatter.format(components)
+                    formatted = formatter.format(metadata)
                     reference_id = citation_id
                 
                 # Update the Word document for footnote mode
@@ -2110,8 +2039,8 @@ def accept_reference():
                     formatted = citation.get('original', '')
                     reference_id = citation_id
                 else:
-                    # Reconstruct SourceComponents from option data
-                    from models import SourceComponents, CitationType
+                    # Reconstruct CitationMetadata from option data
+                    from models import CitationMetadata, CitationType
                     
                     # Map citation_type string to enum
                     type_str = option.get('citation_type', 'unknown').lower()
@@ -2127,7 +2056,7 @@ def accept_reference():
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
                     # Build metadata
-                    components = SourceComponents(
+                    metadata = CitationMetadata(
                         citation_type=citation_type,
                         title=option.get('title', ''),
                         authors=option.get('authors', []),
@@ -2144,7 +2073,7 @@ def accept_reference():
                     
                     # Format using specified style
                     formatter = get_formatter(style)
-                    formatted = formatter.format(components)
+                    formatted = formatter.format(metadata)
                     reference_id = citation_id
                 
                 print(f"[API] Formatted citation {citation_id} option {selected_option}: {formatted[:60]}...")
@@ -2254,9 +2183,9 @@ def accept_reference():
         mode = session_data.get('mode', 'footnote')
         print(f"[API] Mode={mode}, option={option is not None}, citation={citation is not None}")
         if mode == 'footnote' and option and not option.get('is_original'):
-            components_cache = session_data.get('components_cache')
-            print(f"[API] components_cache exists: {components_cache is not None}")
-            if components_cache:
+            metadata_cache = session_data.get('metadata_cache')
+            print(f"[API] metadata_cache exists: {metadata_cache is not None}")
+            if metadata_cache:
                 # Get the original text for this citation
                 # Try 'original' first (results array), then 'text' (notes array) as fallback
                 original_text = ''
@@ -2265,8 +2194,8 @@ def accept_reference():
                     print(f"[API] Found original_text from citation: '{original_text[:50]}...' (len={len(original_text)})")
                 
                 if original_text:
-                    # Build SourceComponents from selected option
-                    from models import SourceComponents, CitationType
+                    # Build CitationMetadata from selected option
+                    from models import CitationMetadata, CitationType
                     type_str = option.get('citation_type', 'unknown').lower()
                     type_map = {
                         'journal': CitationType.JOURNAL,
@@ -2279,7 +2208,7 @@ def accept_reference():
                     }
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
-                    updated_meta = SourceComponents(
+                    updated_meta = CitationMetadata(
                         citation_type=citation_type,
                         raw_source=original_text,
                         title=option.get('title', ''),
@@ -2300,11 +2229,11 @@ def accept_reference():
                     )
                     
                     # Update cache with user's selection
-                    components_cache.set(original_text, updated_meta)
-                    sessions.set(session_id, 'components_cache', components_cache)
-                    print(f"[API] SUCCESS: Updated components_cache for '{original_text[:30]}...' with title='{updated_meta.title[:30] if updated_meta.title else 'N/A'}'")
+                    metadata_cache.set(original_text, updated_meta)
+                    sessions.set(session_id, 'metadata_cache', metadata_cache)
+                    print(f"[API] SUCCESS: Updated metadata_cache for '{original_text[:30]}...' with title='{updated_meta.title[:30] if updated_meta.title else 'N/A'}'")
                 else:
-                    print(f"[API] Warning: Could not update components_cache - original_text is empty. citation={citation is not None}")
+                    print(f"[API] Warning: Could not update metadata_cache - original_text is empty. citation={citation is not None}")
         
         print(f"[API] Accepted reference {reference_id} for session {session_id[:8]}")
         
