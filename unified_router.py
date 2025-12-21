@@ -172,7 +172,7 @@ if SMART_ROUTER_AVAILABLE:
         """
         
         def __init__(self):
-            self.smart_router = SmartURLRouter(debug=False)
+            self.smart_router = SmartURLRouter(debug=True)  # Enable debug temporarily
             self.fallback = GenericURLEngine()
         
         def fetch_by_url(self, url):
