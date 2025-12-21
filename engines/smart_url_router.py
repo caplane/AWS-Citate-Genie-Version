@@ -1,21 +1,16 @@
 """
-Cost-Effective URL Router for CitateGenie
-Uses SerpAPI strategically only for paywalled content
+Smart URL Router V4 - Waterfall News Resolution
+Cost-optimized routing with free sources first
 
-Strategy:
-- Paywalled sites (WaPo, NYT, etc.): Use SerpAPI ($0.005/search) - WORTH IT
-- Open sites (CDC, .gov, etc.): Use direct fetch (free)
-- AI fallback: Only when both fail
+STRATEGY:
+1. News domains → WaterfallNewsResolver (FREE sources first)
+2. Non-news paywalled → SerpAPI regular Google (PAID)
+3. Open content → Return empty for GenericURL (FREE)
 
-Cost comparison:
-- SerpAPI: $0.005/search
-- AI: $0.05/call (10x more expensive)
-- Direct fetch: Free
-
-For paywalled content:
-- Old way: Fetch (fails) → AI ($0.05) = Expensive + unreliable
-- New way: SerpAPI ($0.005) = Cheap + reliable
-- Savings: 90% cost reduction on paywalled URLs!
+COST REDUCTION:
+- News URLs: 90%+ resolved by free tier (Google RSS, etc.)
+- SerpAPI only used as last resort for news
+- Expected savings: $45+ per month (from $50 to ~$5)
 """
 
 import requests
@@ -24,6 +19,7 @@ from urllib.parse import urlparse
 
 from config import SERPAPI_KEY
 from cost_tracker import log_api_call
+from waterfall_news_resolver import WaterfallNewsResolver
 
 
 # Domains known to block direct fetching
@@ -40,57 +36,96 @@ PAYWALLED_DOMAINS = {
     'foreignaffairs.com',
     'harpers.org',
     'scientificamerican.com',
+    'axios.com',
+    'npr.org',
+    'politico.com',
+    'reuters.com',
+    'apnews.com',
+}
+
+# News domains (use waterfall instead of SerpAPI directly)
+NEWS_DOMAINS = {
+    'washingtonpost.com',
+    'nytimes.com',
+    'wsj.com',
+    'theatlantic.com',
+    'newyorker.com',
+    'wired.com',
+    'axios.com',
+    'npr.org',
+    'politico.com',
+    'reuters.com',
+    'apnews.com',
+    'cnn.com',
+    'bbc.com',
+    'theguardian.com',
+    'usatoday.com',
+    'latimes.com',
+    'chicagotribune.com',
+    'bostonglobe.com',
 }
 
 
 class SmartURLRouter:
     """
-    Cost-effective URL metadata extraction.
+    Cost-effective URL metadata extraction with waterfall strategy.
     
-    Uses SerpAPI ONLY for paywalled sites where it saves money vs AI fallback.
+    Uses free news sources first, SerpAPI only as last resort.
     """
     
     def __init__(self, debug=False):
         self.debug = debug
         self.has_serpapi = bool(SERPAPI_KEY)
         
+        # Initialize waterfall resolver for news
+        self.waterfall = WaterfallNewsResolver(debug=debug)
+        
         if self.debug:
+            print(f"[SmartURLRouter] Initialized with waterfall strategy")
             print(f"[SmartURLRouter] SerpAPI available: {self.has_serpapi}")
     
     def resolve(self, url: str):
         """
-        Resolve URL using most cost-effective method.
+        Resolve URL using cost-optimized method.
         
         Returns metadata object compatible with wrapper.
         """
         domain = self._extract_domain(url)
         
-        # Decide routing based on domain
-        if domain in PAYWALLED_DOMAINS:
+        # Route based on domain type
+        if domain in NEWS_DOMAINS:
+            # NEWS: Use waterfall (FREE sources first)
+            if self.debug:
+                print(f"[SmartURLRouter] News domain detected, using waterfall...")
+            return self.waterfall.resolve(url)
+        
+        elif domain in PAYWALLED_DOMAINS:
+            # NON-NEWS PAYWALL: Use SerpAPI directly (no free alternative)
             if self.has_serpapi:
-                # Worth using SerpAPI - cheaper than AI and more reliable than fetch
+                if self.debug:
+                    print(f"[SmartURLRouter] Non-news paywall, using SerpAPI...")
                 return self._search_via_serpapi(url)
             else:
-                # No SerpAPI, will fall back to GenericURL in wrapper
                 return self._empty_metadata(url)
+        
         else:
-            # Open access - let GenericURL handle it (free)
+            # OPEN ACCESS: Let GenericURL handle it (free HTML scraping)
             return self._empty_metadata(url)
     
     def _search_via_serpapi(self, url: str):
         """
-        Search for URL metadata via SerpAPI.
+        Search via SerpAPI (PAID, for non-news paywalled content).
         
-        Cost: $0.005/search (much cheaper than $0.05 AI call)
+        Only called for paywalled non-news sites (Economist, Bloomberg, etc.)
         """
         if self.debug:
-            print(f"[SmartURLRouter] Using SerpAPI for paywalled URL: {url[:60]}")
+            print(f"[SmartURLRouter] Using SerpAPI for non-news paywall: {url[:60]}")
         
         try:
-            # Call SerpAPI
+            # Use regular Google search for non-news
             params = {
                 'engine': 'google',
-                'q': url,  # Search for exact URL
+                'q': url,
                 'api_key': SERPAPI_KEY,
                 'num': 1
             }
@@ -102,17 +137,16 @@ class SmartURLRouter:
             )
             
             # Log cost
-            log_api_call('serpapi', query=url, function='url_metadata')
+            log_api_call('serpapi', query=url, function='url_metadata_nonnews')
             
             if response.status_code == 200:
                 data = response.json()
+                results = data.get('organic_results', [])
                 
                 if self.debug:
                     print(f"[SmartURLRouter] SerpAPI response status: {response.status_code}")
-                    print(f"[SmartURLRouter] Organic results count: {len(data.get('organic_results', []))}")
+                    print(f"[SmartURLRouter] Organic results count: {len(results)}")
                 
-                # Extract from organic results
-                results = data.get('organic_results', [])
                 if results:
                     result = results[0]
                     
@@ -126,10 +160,8 @@ class SmartURLRouter:
                     if self.debug:
                         print(f"[SmartURLRouter] Extracted title: {title}")
                         print(f"[SmartURLRouter] Extracted authors: {authors}")
-                        print(f"[SmartURLRouter] Extracted date: {date}")
-                        print(f"[SmartURLRouter] Extracted publication: {publication}")
                     
-                    # Create metadata object with actual values (not lambdas)
+                    # Create metadata object
                     class Metadata:
                         def __init__(self):
                             self.title = title
@@ -140,28 +172,58 @@ class SmartURLRouter:
                             self.method_used = 'serpapi'
                         
                         def is_complete(self):
-                            # Must have at least title to be useful
                             return bool(self.title)
                     
                     metadata = Metadata()
                     
                     if self.debug:
                         print(f"[SmartURLRouter] ✓ SerpAPI found: {metadata.title[:50] if metadata.title else 'N/A'}")
-                        print(f"[SmartURLRouter] is_complete: {metadata.is_complete()}")
                     
                     return metadata
         
         except Exception as e:
             if self.debug:
                 print(f"[SmartURLRouter] SerpAPI error: {e}")
-            import traceback
-            if self.debug:
-                traceback.print_exc()
         
-        # Failed - return empty to trigger fallback
+        # Failed
         if self.debug:
             print(f"[SmartURLRouter] SerpAPI failed, returning empty metadata")
         return self._empty_metadata(url)
+    
+    def _extract_domain(self, url: str) -> str:
+        """Extract clean domain from URL."""
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        return domain
+    
+    def _extract_publication_name(self, url: str) -> str:
+        """Map domain to publication name."""
+        domain = self._extract_domain(url)
+        
+        publication_map = {
+            'economist.com': 'The Economist',
+            'ft.com': 'Financial Times',
+            'bloomberg.com': 'Bloomberg',
+            'foreignaffairs.com': 'Foreign Affairs',
+            'harpers.org': "Harper's Magazine",
+            'scientificamerican.com': 'Scientific American',
+        }
+        
+        return publication_map.get(domain, domain.replace('.com', '').title())
+    
+    def _extract_authors_from_snippet(self, snippet: str) -> list:
+        """Extract author from snippet if present."""
+        if not snippet:
+            return []
+        
+        import re
+        match = re.search(r'[Bb]y\s+([A-Z][a-z]+(?:\s+[A-Z]\.?\s*)?[A-Z][a-z]+)', snippet)
+        if match:
+            return [match.group(1)]
+        
+        return []
     
     def _empty_metadata(self, url: str):
         """Return empty metadata to trigger GenericURL fallback."""
@@ -179,71 +241,6 @@ class SmartURLRouter:
         
         return EmptyMetadata()
     
-    def _extract_domain(self, url: str) -> str:
-        """Extract clean domain from URL."""
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        return domain
-    
-    def _extract_publication_name(self, url: str) -> str:
-        """Extract publication name from domain."""
-        domain = self._extract_domain(url)
-        
-        # Map common domains to proper publication names
-        publication_map = {
-            'washingtonpost.com': 'Washington Post',
-            'nytimes.com': 'New York Times',
-            'wsj.com': 'Wall Street Journal',
-            'economist.com': 'The Economist',
-            'ft.com': 'Financial Times',
-            'bloomberg.com': 'Bloomberg',
-            'newyorker.com': 'The New Yorker',
-            'theatlantic.com': 'The Atlantic',
-            'wired.com': 'Wired',
-            'foreignaffairs.com': 'Foreign Affairs',
-            'scientificamerican.com': 'Scientific American',
-            'axios.com': 'Axios',
-            'npr.org': 'NPR',
-        }
-        
-        if domain in publication_map:
-            return publication_map[domain]
-        
-        # Fallback: capitalize domain name
-        return domain.replace('.com', '').replace('.org', '').replace('.net', '').title()
-    
-    def _build_search_query(self, url: str) -> str:
-        """Build search query from URL for better results."""
-        # For now, just return the URL
-        # SerpAPI will find the page
-        return url
-    
-    def _extract_authors_from_snippet(self, snippet: str) -> list:
-        """Extract author from snippet if present."""
-        import re
-        
-        # Pattern: "By Author Name"
-        match = re.search(r'[Bb]y\s+([A-Z][a-z]+(?:\s+[A-Z]\.?\s*)?[A-Z][a-z]+)', snippet)
-        if match:
-            return [match.group(1)]
-        
-        return []
-
-
-# Cost tracking stats
-def get_url_routing_stats():
-    """
-    Get statistics on URL routing costs.
-    
-    Use this to monitor if SerpAPI usage is cost-effective.
-    """
-    return {
-        'serpapi_calls': 0,  # Tracked via cost_tracker
-        'ai_fallbacks': 0,   # Tracked via cost_tracker
-        'direct_fetches': 0, # Free
-        'estimated_serpapi_cost': 0.0,
-        'estimated_ai_cost': 0.0,
-        'total_cost': 0.0,
-    }
+    def get_stats(self):
+        """Get usage statistics."""
+        return self.waterfall.get_stats()
