@@ -675,8 +675,8 @@ def format_citation():
                 'formatted': meta_dict.get('title', '')  # title holds original text for this case
             })
         
-        # Convert dict to CitationMetadata
-        from models import CitationMetadata, CitationType
+        # Convert dict to SourceComponents
+        from models import SourceComponents, CitationType
         
         # Map citation_type string to enum
         type_map = {
@@ -697,7 +697,7 @@ def format_citation():
             CitationType.UNKNOWN
         )
         
-        metadata = CitationMetadata(
+        metadata = SourceComponents(
             citation_type=citation_type,
             title=meta_dict.get('title', ''),
             authors=meta_dict.get('authors', []),
@@ -1913,7 +1913,7 @@ def accept_reference():
                     reference_id = citation_id
                 else:
                     # Format from metadata
-                    from models import CitationMetadata, CitationType
+                    from models import SourceComponents, CitationType
                     
                     type_str = option.get('citation_type', 'unknown').lower()
                     type_map = {
@@ -1927,7 +1927,7 @@ def accept_reference():
                     }
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
-                    metadata = CitationMetadata(
+                    metadata = SourceComponents(
                         citation_type=citation_type,
                         title=option.get('title', ''),
                         authors=option.get('authors', []),
@@ -2007,8 +2007,8 @@ def accept_reference():
                     formatted = citation.get('original', '')
                     reference_id = citation_id
                 else:
-                    # Reconstruct CitationMetadata from option data
-                    from models import CitationMetadata, CitationType
+                    # Reconstruct SourceComponents from option data
+                    from models import SourceComponents, CitationType
                     
                     # Map citation_type string to enum
                     type_str = option.get('citation_type', 'unknown').lower()
@@ -2024,7 +2024,7 @@ def accept_reference():
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
                     # Build metadata
-                    metadata = CitationMetadata(
+                    metadata = SourceComponents(
                         citation_type=citation_type,
                         title=option.get('title', ''),
                         authors=option.get('authors', []),
@@ -2162,8 +2162,8 @@ def accept_reference():
                     print(f"[API] Found original_text from citation: '{original_text[:50]}...' (len={len(original_text)})")
                 
                 if original_text:
-                    # Build CitationMetadata from selected option
-                    from models import CitationMetadata, CitationType
+                    # Build SourceComponents from selected option
+                    from models import SourceComponents, CitationType
                     type_str = option.get('citation_type', 'unknown').lower()
                     type_map = {
                         'journal': CitationType.JOURNAL,
@@ -2176,7 +2176,7 @@ def accept_reference():
                     }
                     citation_type = type_map.get(type_str, CitationType.JOURNAL)
                     
-                    updated_meta = CitationMetadata(
+                    updated_meta = SourceComponents(
                         citation_type=citation_type,
                         raw_source=original_text,
                         title=option.get('title', ''),
