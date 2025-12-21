@@ -33,7 +33,7 @@ ARCHITECTURE:
 """
 
 import re
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
 from models import SourceComponents, CitationType
@@ -961,21 +961,15 @@ def _route_journal(query: str, gist: str = "") -> Optional[SourceComponents]:
         # Still return the best free result - don't escalate to paid API
         return best
     
-    # Layer 4.5: Try Google Scholar (paid) ONLY if free APIs returned NOTHING
-    if GOOGLE_SCHOLAR_AVAILABLE and len(results) == 0:
-        try:
-            gs_result = _google_scholar.search(query)
-            if gs_result and gs_result.has_minimum_data():
-                gs_result.confidence = _score_author_position(gs_result, query)
-                if gs_result.confidence >= 0.7:
-                    print(f"[UnifiedRouter] Found via Google Scholar (author-score: {gs_result.confidence})")
-                    return gs_result
-                # Add to results pool
-                results.append(gs_result)
-        except Exception as e:
-            print(f"[UnifiedRouter] Google Scholar error: {e}")
+    # Layer 4.5: DISABLED - Google Scholar via SerpAPI ($0.01/call) is too expensive
+    # GPT-5.1 is 5x cheaper and often better quality
+    # Keeping code commented for reference:
+    # if GOOGLE_SCHOLAR_AVAILABLE and len(results) == 0:
+    #     try:
+    #         gs_result = _google_scholar.search(query)
+    #         ...
     
-    # Layer 6: AI lookup with verification (last resort)
+    # Layer 6: AI lookup with verification (now primary fallback - cheaper than SerpAPI)
     if AI_AVAILABLE:
         try:
             ai_result = lookup_fragment(query, gist=gist, verify=True)
@@ -1053,6 +1047,51 @@ def _is_academic_ai_url(url: str) -> bool:
     except Exception:
         return False
 
+# URL result cache to prevent repeated failed fetches (V4.3)
+_url_result_cache: Dict[str, Optional[SourceComponents]] = {}
+_url_failure_cache: set = set()  # URLs that have definitively failed
+
+# Import URL tracking
+try:
+    from cost_tracker import log_url_fetch
+    URL_TRACKING_AVAILABLE = True
+except ImportError:
+    URL_TRACKING_AVAILABLE = False
+    def log_url_fetch(*args, **kwargs):
+        pass
+
+
+def _log_url_success(url: str, method: str, result: SourceComponents, start_time=None, used_ai=False):
+    """Helper to log successful URL fetch."""
+    if URL_TRACKING_AVAILABLE:
+        import time
+        latency = int((time.time() - start_time) * 1000) if start_time else None
+        log_url_fetch(
+            url=url,
+            success=True,
+            resolution_method=method,
+            has_title=bool(result.title and result.title != 'N/A'),
+            has_authors=bool(result.authors and len(result.authors) > 0),
+            has_doi=bool(result.doi),
+            latency_ms=latency,
+            used_ai_fallback=used_ai
+        )
+
+
+def _log_url_failure(url: str, method: str, reason: str, start_time=None, used_ai=False):
+    """Helper to log failed URL fetch."""
+    if URL_TRACKING_AVAILABLE:
+        import time
+        latency = int((time.time() - start_time) * 1000) if start_time else None
+        log_url_fetch(
+            url=url,
+            success=False,
+            resolution_method=method,
+            failure_reason=reason,
+            latency_ms=latency,
+            used_ai_fallback=used_ai
+        )
+
 
 def _route_url(url: str) -> Optional[SourceComponents]:
     """
@@ -1062,14 +1101,35 @@ def _route_url(url: str) -> Optional[SourceComponents]:
     1. Extract DOI from URL → Crossref lookup (authoritative)
     2. Academic publisher URL → Crossref search (authoritative)
     3. Medical URL → PubMed (authoritative)
-    4. Fetch URL via GenericURLEngine → Extract real metadata from HTML
-    5. AI fallback WITH VERIFICATION → Only if HTML fails, and must verify against DBs
-    6. Fallback → Return partial HTML data or URL-only
+    4. PII extraction for paywalled publishers (Lancet, Cell, etc.) → PubMed
+    5. Fetch URL via GenericURLEngine → Extract real metadata from HTML
+    6. AI fallback WITH VERIFICATION → Only if HTML fails, and must verify against DBs
+    7. Fallback → Return partial HTML data or URL-only
+    
+    NEW (V4.3): Caches URL results to prevent repeated failed fetches.
+    If a URL has already been processed (success or failure), returns cached result.
+    
+    NEW (V4.3): Logs all URL fetch attempts with resolution method and success/failure.
     
     CRITICAL: AI cannot browse URLs via API. Previous "ChatGPT-first" strategy
     caused hallucinations (e.g., wrong authors for correct titles). Now we
     fetch actual page content first, and only use AI as verified fallback.
     """
+    import time
+    start_time = time.time()
+    
+    global _url_result_cache, _url_failure_cache
+    
+    # Check cache first - avoid repeated lookups
+    if url in _url_result_cache:
+        cached = _url_result_cache[url]
+        print(f"[UnifiedRouter] URL cache hit: {url[:50]}... → {'found' if cached else 'empty'}")
+        return cached
+    
+    if url in _url_failure_cache:
+        print(f"[UnifiedRouter] URL previously failed (cached): {url[:50]}...")
+        return None
+    
     # Check for DOI in URL
     doi = extract_doi_from_url(url)
     if doi:
@@ -1077,6 +1137,8 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             result = _crossref.get_by_id(doi)
             if result and result.has_minimum_data():
                 result.url = url
+                _url_result_cache[url] = result
+                _log_url_success(url, 'doi_crossref', result, start_time)
                 return result
         except Exception:
             pass
@@ -1090,6 +1152,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             if result and result.has_minimum_data():
                 result.url = url
                 print("[UnifiedRouter] Found via DOI in URL path")
+                _log_url_success(url, 'doi_in_path', result, start_time)
                 return result
         except Exception:
             pass
@@ -1100,6 +1163,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             result = _crossref.search(url)
             if result and result.has_minimum_data():
                 result.url = url
+                _log_url_success(url, 'academic_crossref', result, start_time)
                 return result
         except Exception:
             pass
@@ -1110,6 +1174,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             result = _pubmed.search(url)
             if result and result.has_minimum_data():
                 result.url = url
+                _log_url_success(url, 'medical_pubmed', result, start_time)
                 return result
         except Exception:
             pass
@@ -1136,6 +1201,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
     is_pubmed_publisher = any(pub in url_lower for pub in PUBMED_INDEXED_PUBLISHERS)
     
     if is_pubmed_publisher:
+        print(f"[UnifiedRouter] Paywalled publisher detected, trying PII extraction: {url[:60]}...")
         # Try to extract PII from URL
         # Format 1: PIIS0140-6736(51)91311-6 (Lancet - with PII prefix and parentheses)
         # Format 2: S0092-8674(25)01138-9 (Cell - no PII prefix, with parentheses)
@@ -1143,16 +1209,22 @@ def _route_url(url: str) -> Optional[SourceComponents]:
         pii_match = re.search(r'(?:PII)?(S[0-9]{4}-?[0-9]{4}(?:\([0-9]+\))?[0-9A-Z\-]+)', url, re.IGNORECASE)
         if pii_match:
             pii = pii_match.group(1)
-            print(f"[UnifiedRouter] Extracted PII from publisher URL: {pii}")
+            print(f"[UnifiedRouter] Extracted PII: {pii}")
             try:
                 # Search PubMed with the PII
                 result = _pubmed.search(pii)
                 if result and result.has_minimum_data():
                     result.url = url
                     print(f"[UnifiedRouter] ✓ PubMed found via PII: '{result.title[:50] if result.title else 'N/A'}'")
+                    _url_result_cache[url] = result
+                    _log_url_success(url, 'pii_pubmed', result, start_time)
                     return result
+                else:
+                    print(f"[UnifiedRouter] PubMed PII search returned no results")
             except Exception as e:
                 print(f"[UnifiedRouter] PubMed PII search failed: {e}")
+        else:
+            print(f"[UnifiedRouter] No PII pattern found in URL")
     
     # ==========================================================================
     # FETCH-FIRST STRATEGY (Updated 2025-12-15)
@@ -1164,6 +1236,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
     # ==========================================================================
     
     html_result = None
+    html_error = None
     try:
         print(f"[UnifiedRouter] Fetching URL metadata: {url[:60]}...")
         html_result = _generic_url.fetch_by_url(url)
@@ -1172,11 +1245,14 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             if html_result.authors:
                 html_result.url = url
                 print(f"[UnifiedRouter] ✓ HTML extracted: '{html_result.title[:50] if html_result.title else 'N/A'}' by {html_result.authors}")
+                _log_url_success(url, 'html_scrape', html_result, start_time)
                 return html_result
             else:
                 print(f"[UnifiedRouter] HTML got title but no authors, will try to enhance")
+                html_error = 'no_authors'
     except Exception as e:
         print(f"[UnifiedRouter] GenericURL error: {e}")
+        html_error = str(e)[:100]
     
     # ==========================================================================
     # AI FALLBACK WITH VERIFICATION
@@ -1194,6 +1270,7 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             if result and result.has_minimum_data():
                 result.url = url
                 print(f"[UnifiedRouter] ✓ AI+verified: '{result.title[:50] if result.title else 'N/A'}' by {result.authors}")
+                _log_url_success(url, 'ai_academic', result, start_time, used_ai=True)
                 return result
             else:
                 print(f"[UnifiedRouter] AI lookup failed verification or returned incomplete data")
@@ -1208,9 +1285,21 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             if result and result.has_minimum_data():
                 result.url = url
                 print(f"[UnifiedRouter] ✓ AI+verified newspaper: '{result.title[:50] if result.title else 'N/A'}'")
+                _url_result_cache[url] = result
+                _log_url_success(url, 'ai_newspaper', result, start_time, used_ai=True)
                 return result
             else:
-                print(f"[UnifiedRouter] AI newspaper lookup failed verification")
+                print(f"[UnifiedRouter] AI newspaper lookup failed verification, trying without verification...")
+                # For newspapers, try again without strict verification
+                # Newspapers aren't in academic databases anyway, so verification is limited
+                result_unverified = lookup_newspaper_url(url, verify=False)
+                if result_unverified and result_unverified.title:
+                    result_unverified.url = url
+                    # Accept if we at least got a title (authors are often missing from paywalled sites)
+                    print(f"[UnifiedRouter] ✓ AI newspaper (unverified): '{result_unverified.title[:50] if result_unverified.title else 'N/A'}' by {result_unverified.authors}")
+                    _url_result_cache[url] = result_unverified
+                    _log_url_success(url, 'ai_newspaper_unverified', result_unverified, start_time, used_ai=True)
+                    return result_unverified
         except Exception as e:
             print(f"[UnifiedRouter] AI newspaper lookup failed: {e}")
     
@@ -1222,15 +1311,23 @@ def _route_url(url: str) -> Optional[SourceComponents]:
         # Return whatever we got from HTML, even if incomplete
         html_result.url = url
         print(f"[UnifiedRouter] Returning partial HTML data: title='{html_result.title[:50] if html_result.title else 'N/A'}'")
+        _url_result_cache[url] = html_result
+        # Log as partial success (has some data but not complete)
+        _log_url_failure(url, 'html_partial', html_error or 'incomplete_metadata', start_time)
         return html_result
     
-    # Final fallback - just return the URL as citation
+    # Final fallback - mark as failed and return URL-only citation
     print(f"[UnifiedRouter] URL fallback - no metadata extracted for: {url[:60]}...")
-    return SourceComponents(
+    _url_failure_cache.add(url)  # Mark this URL as failed to prevent retries
+    fallback = SourceComponents(
         citation_type=CitationType.URL,
         url=url,
         raw_data={'original': url}
     )
+    _url_result_cache[url] = fallback
+    # Log complete failure
+    _log_url_failure(url, 'failed', html_error or 'all_methods_failed', start_time)
+    return fallback
 
 
 # =============================================================================
@@ -1283,19 +1380,86 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
     # If citation contains a URL, extract it and route ONLY via URL engines.
     # Skip all text parsing/searching - the URL is the authoritative source.
     # This saves cost (no SerpAPI searches on surrounding text).
+    # 
+    # If URL routing fails to get minimum data (title+author), trigger AI fallback.
     # =========================================================================
     url_match = re.search(r'https?://[^\s,\)]+', query)
     if url_match:
         url = url_match.group(0).rstrip('.,;:')
         print(f"[UnifiedRouter] URL-priority rule: extracting URL only: {url[:60]}...")
         components = _route_url(url)
-        if components:
-            # Store in cache if available
+        
+        # Check if we got minimum required data
+        # For newspapers: title is sufficient (authors often behind paywall)
+        # For other sources: require title AND author
+        is_newspaper = _is_newspaper_url(url)
+        
+        if is_newspaper:
+            has_minimum = (
+                components and 
+                components.title and 
+                components.title != 'N/A'
+            )
+        else:
+            has_minimum = (
+                components and 
+                components.title and 
+                components.title != 'N/A' and
+                components.authors and 
+                len(components.authors) > 0
+            )
+        
+        if has_minimum:
+            # Success - store in cache and return
             if components_cache is not None:
                 components_cache.set(query, components)
             return components, formatter.format(components)
-        # If URL routing failed, fall through to normal processing
-        print(f"[UnifiedRouter] URL routing failed, falling back to text parsing")
+        
+        # URL fetch failed to get minimum data - try AI fallback
+        print(f"[UnifiedRouter] URL fetch incomplete (title={components.title if components else 'None'}, authors={components.authors if components else 'None'}), trying AI fallback...")
+        
+        if AI_AVAILABLE:
+            ai_result = None
+            
+            # Try newspaper AI for newspaper URLs (more aggressive - accept unverified)
+            if _is_newspaper_url(url) and NEWSPAPER_AI_AVAILABLE:
+                try:
+                    print(f"[UnifiedRouter] AI fallback (newspaper): {url[:60]}...")
+                    # First try with verification
+                    ai_result = lookup_newspaper_url(url, verify=True)
+                    if not (ai_result and ai_result.has_minimum_data()):
+                        # Try without verification - newspapers aren't in DBs anyway
+                        print(f"[UnifiedRouter] AI newspaper verification failed, trying unverified...")
+                        ai_result = lookup_newspaper_url(url, verify=False)
+                except Exception as e:
+                    print(f"[UnifiedRouter] AI newspaper fallback failed: {e}")
+            
+            # Try academic AI for other URLs
+            if not ai_result and ACADEMIC_AI_AVAILABLE:
+                try:
+                    print(f"[UnifiedRouter] AI fallback (academic): {url[:60]}...")
+                    ai_result = lookup_academic_url(url)
+                except Exception as e:
+                    print(f"[UnifiedRouter] AI academic fallback failed: {e}")
+            
+            if ai_result and ai_result.has_minimum_data():
+                ai_result.url = url
+                print(f"[UnifiedRouter] ✓ AI fallback succeeded: '{ai_result.title[:50] if ai_result.title else 'N/A'}' by {ai_result.authors}")
+                if components_cache is not None:
+                    components_cache.set(query, ai_result)
+                # Cache the AI result for this URL too
+                _url_result_cache[url] = ai_result
+                return ai_result, formatter.format(ai_result)
+            else:
+                print(f"[UnifiedRouter] AI fallback returned insufficient data")
+        
+        # All attempts failed - return whatever we have (may be URL-only)
+        if components:
+            if components_cache is not None:
+                components_cache.set(query, components)
+            return components, formatter.format(components)
+        
+        print(f"[UnifiedRouter] URL routing completely failed, falling through to text parsing")
     
     # =========================================================================
     # RULE 2: COMPOUND CITATION SPLITTING (V4.3)
@@ -1638,36 +1802,11 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
         except Exception as e:
             print(f"[UnifiedRouter] PubMed error: {e}")
         
-        # Add Google Scholar results (paid, but excellent for fragments)
-        # Only search if free APIs returned < 2 results (cost optimization)
-        if GOOGLE_SCHOLAR_AVAILABLE and len(results) < 2:
-            try:
-                gs_result = _google_scholar.search(query)
-                if gs_result:
-                    title_preview = gs_result.title[:50] if gs_result.title else 'NO TITLE'
-                    journal_preview = gs_result.journal[:30] if gs_result.journal else 'NO JOURNAL'
-                    print(f"[UnifiedRouter] Google Scholar returned: '{title_preview}...'")
-                    print(f"[UnifiedRouter] Google Scholar fields: authors={gs_result.authors}, year={gs_result.year}, journal={journal_preview}")
-                    print(f"[UnifiedRouter] Google Scholar has_minimum_data={gs_result.has_minimum_data()}")
-                    if gs_result.has_minimum_data():
-                        is_duplicate = any(
-                            gs_result.title and r[0].title and 
-                            gs_result.title.lower()[:30] == r[0].title.lower()[:30]
-                            for r in results
-                        )
-                        print(f"[UnifiedRouter] Google Scholar duplicate check: {is_duplicate}")
-                        if not is_duplicate:
-                            formatted = formatter.format(gs_result)
-                            results.append((gs_result, formatted, "Google Scholar"))
-                            print(f"[UnifiedRouter] ✓ Added Google Scholar result")
-                        else:
-                            print(f"[UnifiedRouter] ✗ Google Scholar skipped (duplicate)")
-                    else:
-                        print(f"[UnifiedRouter] ✗ Google Scholar failed has_minimum_data")
-                else:
-                    print(f"[UnifiedRouter] Google Scholar returned None")
-            except Exception as e:
-                print(f"[UnifiedRouter] Google Scholar error: {e}")
+        # DISABLED: Google Scholar via SerpAPI ($0.01/call) - replaced with AI fallback
+        # GPT-5.1 at $0.002/call is 5x cheaper and often better quality
+        # if GOOGLE_SCHOLAR_AVAILABLE and len(results) < 2:
+        #     gs_result = _google_scholar.search(query)
+        #     ...
         
         # Also search book engines (Google Books, Library of Congress, Open Library)
         # Many queries could be books misclassified as journals

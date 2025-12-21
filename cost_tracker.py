@@ -498,6 +498,176 @@ def get_citation_type_distribution(days: int = 30) -> Dict[str, int]:
         return {}
 
 
+# =============================================================================
+# URL FETCH TRACKING (V4.3)
+# =============================================================================
+
+def log_url_fetch(
+    url: str,
+    success: bool,
+    resolution_method: str,
+    failure_reason: Optional[str] = None,
+    domain: Optional[str] = None,
+    has_title: bool = False,
+    has_authors: bool = False,
+    has_doi: bool = False,
+    latency_ms: Optional[int] = None,
+    used_ai_fallback: bool = False
+):
+    """
+    Log a URL fetch attempt for analytics.
+    
+    Args:
+        url: The URL being fetched
+        success: Whether we got minimum citation data (title + author)
+        resolution_method: How it was resolved (doi, pii_pubmed, html_scrape, ai_fallback, failed)
+        failure_reason: Why it failed (403, timeout, no_metadata, ai_failed, etc.)
+        domain: Extracted domain (e.g., 'thelancet.com')
+        has_title: Whether title was extracted
+        has_authors: Whether authors were extracted
+        has_doi: Whether DOI was found
+        latency_ms: How long the fetch took
+        used_ai_fallback: Whether AI was needed as fallback
+    """
+    # Extract domain if not provided
+    if not domain:
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc.replace('www.', '')
+        except:
+            domain = 'unknown'
+    
+    # Log to database via existing log_api_call
+    log_api_call(
+        provider='url_fetch',
+        query=url[:500],
+        function=resolution_method,
+        source_type='url',
+        success=success,
+        latency_ms=latency_ms,
+        error_message=failure_reason,
+        metadata={
+            'domain': domain,
+            'has_title': has_title,
+            'has_authors': has_authors,
+            'has_doi': has_doi,
+            'used_ai_fallback': used_ai_fallback,
+            'failure_reason': failure_reason
+        }
+    )
+    
+    # Print summary
+    status = "✓" if success else "✗"
+    print(f"[URLTracker] {status} {domain} via {resolution_method}" + 
+          (f" (failed: {failure_reason})" if failure_reason else ""))
+
+
+def get_url_fetch_stats(days: int = 30) -> Dict[str, Any]:
+    """
+    Get URL fetch statistics for dashboard.
+    
+    Returns:
+        Dict with:
+        - total_urls: Total URL fetch attempts
+        - success_rate: Percentage of successful fetches (with title+author)
+        - by_method: Breakdown by resolution method
+        - by_domain: Breakdown by domain
+        - failures: Breakdown of failure reasons
+        - ai_fallback_rate: How often AI fallback was needed
+    """
+    try:
+        from billing.db import get_db
+        from billing.admin_models import APICall
+        from sqlalchemy import func
+        from datetime import timedelta
+        import json
+        
+        db = get_db()
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        # Get all URL fetch records
+        url_calls = db.query(APICall).filter(
+            APICall.timestamp >= since,
+            APICall.provider == 'url_fetch'
+        ).all()
+        
+        if not url_calls:
+            return {
+                'total_urls': 0,
+                'success_rate': 0,
+                'by_method': {},
+                'by_domain': {},
+                'failures': {},
+                'ai_fallback_rate': 0
+            }
+        
+        total = len(url_calls)
+        successful = sum(1 for c in url_calls if c.success)
+        ai_fallbacks = 0
+        by_method = {}
+        by_domain = {}
+        failures = {}
+        
+        for call in url_calls:
+            # Count by method
+            method = call.endpoint or 'unknown'
+            by_method[method] = by_method.get(method, 0) + 1
+            
+            # Parse metadata
+            meta = call.metadata_json or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except:
+                    meta = {}
+            
+            # Count by domain
+            domain = meta.get('domain', 'unknown')
+            if domain not in by_domain:
+                by_domain[domain] = {'total': 0, 'success': 0}
+            by_domain[domain]['total'] += 1
+            if call.success:
+                by_domain[domain]['success'] += 1
+            
+            # Count AI fallbacks
+            if meta.get('used_ai_fallback'):
+                ai_fallbacks += 1
+            
+            # Count failure reasons
+            if not call.success:
+                reason = meta.get('failure_reason') or call.error_message or 'unknown'
+                failures[reason] = failures.get(reason, 0) + 1
+        
+        # Calculate domain success rates
+        for domain in by_domain:
+            d = by_domain[domain]
+            d['success_rate'] = round(d['success'] / d['total'] * 100, 1) if d['total'] > 0 else 0
+        
+        return {
+            'total_urls': total,
+            'success_rate': round(successful / total * 100, 1) if total > 0 else 0,
+            'successful': successful,
+            'failed': total - successful,
+            'by_method': by_method,
+            'by_domain': by_domain,
+            'failures': failures,
+            'ai_fallback_count': ai_fallbacks,
+            'ai_fallback_rate': round(ai_fallbacks / total * 100, 1) if total > 0 else 0
+        }
+        
+    except Exception as e:
+        print(f"[CostTracker] Error getting URL stats: {e}")
+        return {
+            'total_urls': 0,
+            'success_rate': 0,
+            'by_method': {},
+            'by_domain': {},
+            'failures': {},
+            'ai_fallback_rate': 0,
+            'error': str(e)
+        }
+
+
 def print_summary(days: int = 30):
     """Print a cost summary to console."""
     stats = get_total_cost(days)
@@ -510,6 +680,37 @@ def print_summary(days: int = 30):
     print("\nBy provider:")
     for provider, data in stats['by_provider'].items():
         print(f"  {provider:12} ${data['cost']:.4f} ({data['calls']} calls)")
+    print("="*50 + "\n")
+
+
+def print_url_summary(days: int = 30):
+    """Print URL fetch summary to console."""
+    stats = get_url_fetch_stats(days)
+    
+    print("\n" + "="*50)
+    print(f"URL FETCH SUMMARY (Last {days} days)")
+    print("="*50)
+    print(f"Total URLs: {stats['total_urls']}")
+    print(f"Success Rate: {stats['success_rate']}%")
+    print(f"AI Fallback Rate: {stats['ai_fallback_rate']}%")
+    
+    if stats.get('by_method'):
+        print("\nBy Resolution Method:")
+        for method, count in sorted(stats['by_method'].items(), key=lambda x: -x[1]):
+            print(f"  {method:20} {count}")
+    
+    if stats.get('failures'):
+        print("\nFailure Reasons:")
+        for reason, count in sorted(stats['failures'].items(), key=lambda x: -x[1]):
+            print(f"  {reason:20} {count}")
+    
+    if stats.get('by_domain'):
+        print("\nTop Domains:")
+        sorted_domains = sorted(stats['by_domain'].items(), 
+                               key=lambda x: -x[1]['total'])[:10]
+        for domain, data in sorted_domains:
+            print(f"  {domain:30} {data['success_rate']:5.1f}% ({data['success']}/{data['total']})")
+    
     print("="*50 + "\n")
 
 
