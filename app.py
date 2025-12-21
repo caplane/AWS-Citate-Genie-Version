@@ -49,6 +49,9 @@ from functools import wraps
 from flask import Flask, request, jsonify, render_template, send_file
 from werkzeug.utils import secure_filename
 
+# Document logger for per-document cost tracking
+from document_logger import DocumentLogger, log_from_source_components
+
 from unified_router import get_citation, get_multiple_citations, get_parenthetical_options, get_parenthetical_components
 from formatters.base import get_formatter
 from document_processor import process_document
@@ -802,6 +805,15 @@ def process_doc():
             is_preview=is_preview
         )
         
+        # Initialize document logger for detailed per-citation tracking
+        user_id = current_user.id if is_authenticated else None
+        doc_logger = DocumentLogger(
+            session_id=doc_session_id,
+            filename=file.filename,
+            user_id=user_id
+        )
+        print(f"[API] DocumentLogger initialized for session {doc_session_id}")
+        
         style = request.form.get('style', 'Chicago Manual of Style')
         add_links = request.form.get('add_links', 'true').lower() == 'true'
         
@@ -812,8 +824,15 @@ def process_doc():
         processed_bytes, results, components_cache = process_document(
             file_bytes,
             style=style,
-            add_links=add_links
+            add_links=add_links,
+            doc_logger=doc_logger  # Pass logger for per-citation tracking
         )
+        
+        # Save document processing log
+        log_path = doc_logger.save()
+        log_summary = doc_logger.get_summary()
+        print(f"[API] Document log saved: {log_path}")
+        print(f"[API] Total cost: ${log_summary['total_cost']:.4f}, Success rate: {log_summary['success_rate']:.1f}%")
         
         # Record preview usage for rate limiting
         if is_preview:
@@ -844,6 +863,8 @@ def process_doc():
             for idx, r in enumerate(results)
         ])
         sessions.set(session_id, 'filename', secure_filename(file.filename))
+        sessions.set(session_id, 'log_path', log_path)  # Document processing log
+        sessions.set(session_id, 'cost_summary', log_summary)  # Cost tracking summary
         
         print(f"[API] Session {session_id[:8]} initialized with {len(results)} notes, doc size={len(processed_bytes)}")
         print(f"[API] Total active sessions: {len(sessions._sessions)}")
