@@ -152,12 +152,13 @@ class AuthorDateEngine:
                     self._search_openalex, author, year, second_author, third_author
                 )] = "openalex"
             
-            # Google Scholar via SerpAPI (paid but cheaper than Claude)
-            gs = self._get_google_scholar()
-            if gs:
-                futures[executor.submit(
-                    self._search_google_scholar, author, year, second_author, third_author
-                )] = "google_scholar"
+            # DISABLED: Google Scholar via SerpAPI ($0.01/call) - too expensive
+            # GPT-5.1 at $0.002/call is 5x cheaper and often better quality
+            # gs = self._get_google_scholar()
+            # if gs:
+            #     futures[executor.submit(
+            #         self._search_google_scholar, author, year, second_author, third_author
+            #     )] = "google_scholar"
             
             # Collect results
             for future in as_completed(futures, timeout=timeout):

@@ -64,9 +64,14 @@ if not AI_PROVIDER_CHAIN:
     AI_PROVIDER_CHAIN = ['gemini', 'openai', 'claude']
 
 # Model configuration
+# Updated 2025-12-21: Use GPT-5.1 as primary model (cheaper than SerpAPI, better quality)
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.1')  # Updated from gpt-4o
 CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+
+# Specialized model for newspaper/magazine URL lookups
+# GPT-5.1: $0.625/1M input, $5.00/1M output - 5x cheaper than SerpAPI ($0.01/call)
+OPENAI_NEWSPAPER_MODEL = os.environ.get('OPENAI_NEWSPAPER_MODEL', 'gpt-5.1')
 
 # Check which providers are available
 AVAILABLE_PROVIDERS = []
@@ -157,10 +162,19 @@ def _call_gemini(prompt: str, system: str, max_tokens: int) -> Optional[str]:
     return candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
 
 
-def _call_openai(prompt: str, system: str, max_tokens: int) -> Optional[str]:
-    """Call OpenAI API."""
+def _call_openai(prompt: str, system: str, max_tokens: int, model: str = None) -> Optional[str]:
+    """Call OpenAI API.
+    
+    Args:
+        prompt: User prompt
+        system: System prompt  
+        max_tokens: Max tokens for response
+        model: Model to use (defaults to OPENAI_MODEL, e.g. gpt-5.1)
+    """
     if not OPENAI_API_KEY:
         return None
+    
+    use_model = model or OPENAI_MODEL
     
     response = requests.post(
         "https://api.openai.com/v1/chat/completions",
@@ -169,7 +183,7 @@ def _call_openai(prompt: str, system: str, max_tokens: int) -> Optional[str]:
             "Content-Type": "application/json"
         },
         json={
-            "model": OPENAI_MODEL,
+            "model": use_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt}
@@ -190,7 +204,7 @@ def _call_openai(prompt: str, system: str, max_tokens: int) -> Optional[str]:
     usage = result.get('usage', {})
     input_tokens = usage.get('prompt_tokens', 0)
     output_tokens = usage.get('completion_tokens', 0)
-    log_api_call('openai', input_tokens, output_tokens, prompt[:100], 'ai_lookup')
+    log_api_call('openai', input_tokens, output_tokens, prompt[:100], f'ai_lookup:{use_model}')
     
     return result['choices'][0]['message']['content']
 
@@ -420,7 +434,10 @@ def _call_claude_simple(prompt: str) -> Optional[str]:
 
 def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceComponents]:
     """
-    Look up newspaper/magazine article metadata using AI.
+    Look up newspaper/magazine article metadata using AI (GPT-5.1).
+    
+    Uses GPT-5.1 model which is optimized for URL metadata extraction.
+    Cost: ~$0.002 per call vs SerpAPI at $0.01 per call (5x cheaper).
     
     IMPORTANT: AI cannot actually browse URLs via API. It guesses based on
     URL patterns and training data. When verify=True, results are checked
@@ -440,7 +457,8 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
     prompt = f"Extract citation metadata from this article URL:\n{url}"
     
     try:
-        response = _call_openai(prompt, NEWSPAPER_URL_SYSTEM, max_tokens=500)
+        # Use specialized newspaper model (gpt-5.1) for better accuracy and lower cost
+        response = _call_openai(prompt, NEWSPAPER_URL_SYSTEM, max_tokens=500, model=OPENAI_NEWSPAPER_MODEL)
         
         if not response:
             print("[AI_Lookup] No response from AI for newspaper URL")
@@ -471,7 +489,7 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
         result = SourceComponents(
             citation_type=CitationType.NEWSPAPER,
             raw_source=url,
-            source_engine="AI Lookup",
+            source_engine=f"AI Lookup ({OPENAI_NEWSPAPER_MODEL})",
             title=data.get('title', ''),
             authors=data.get('authors', []),
             newspaper=data.get('publication', ''),
@@ -492,7 +510,7 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
             if not _verify_newspaper_consistency(result, url):
                 print(f"[AI_Lookup] ✗ Newspaper metadata failed consistency check")
                 return None
-            result.source_engine = "AI Lookup (consistency checked)"
+            result.source_engine = f"AI Lookup ({OPENAI_NEWSPAPER_MODEL}, verified)"
             result.confidence = 0.85
         
         print(f"[AI_Lookup] Extracted newspaper: '{result.title[:50]}...' by {result.authors} from {result.newspaper}")
