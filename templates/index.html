@@ -2026,10 +2026,7 @@
                                 <i class="fas fa-download"></i>
                                 Download Processed Document
                             </button>
-                            <button class="btn-secondary" onclick="exportMetadataCSV()">
-                                <i class="fas fa-file-csv"></i>
-                                Export Citations as CSV
-                            </button>
+
                             <button class="btn-secondary" onclick="backToReview()">
                                 <i class="fas fa-edit"></i>
                                 Back to Review
@@ -3046,26 +3043,7 @@
             }
         }
         
-        async function exportMetadataCSV() {
-            if (!currentSessionId) return alert('No document to export');
-            
-            try {
-                const response = await fetch(`/api/export-components/${currentSessionId}`);
-                if (!response.ok) throw new Error('Export failed');
-                
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'citategenie_citations.csv';
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                a.remove();
-            } catch (error) {
-                alert('Error: ' + error.message);
-            }
-        }
+        // CSV export moved to admin dashboard
         
         function resetDocument() {
             currentSessionId = null;
