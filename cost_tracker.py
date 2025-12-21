@@ -539,7 +539,7 @@ def log_url_fetch(
     
     # Log to database via existing log_api_call
     log_api_call(
-        provider='url_fetch',
+        provider=resolution_method,
         query=url[:500],
         function=resolution_method,
         source_type='url',
