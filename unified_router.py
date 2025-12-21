@@ -187,7 +187,7 @@ if SMART_ROUTER_AVAILABLE:
                     return SourceComponents(
                         title=metadata.title,
                         authors=metadata.authors,
-                        publication_name=metadata.publication,
+                        newspaper=metadata.publication,  # Fixed: was publication_name
                         date=metadata.date,
                         url=url,
                         citation_type=CitationType.URL
