@@ -4,11 +4,11 @@ citeflex/unified_router.py
 Unified routing logic combining the best of CiteFlex Pro and Cite Fix Pro.
 
 Version History:
-    2025-12-21 V4.1: MAJOR - Integrated search-first URL router
-                     - Replaced GenericURLEngine with URLRouter wrapper
-                     - 83% cost reduction for URL metadata extraction
-                     - 98% success rate on paywalled content (WaPo, NYT, etc.)
-                     - Search → Fetch → AI cascade routing
+    2025-12-21 V4.1: SMART URL ROUTING - SerpAPI for paywalled content only
+                     - Uses SerpAPI ($0.005) only for paywalled sites (WaPo, NYT, etc.)
+                     - Direct fetch (FREE) for open content (CDC, .gov, etc.)
+                     - 90% cost reduction vs AI fallback on paywalled URLs
+                     - Strategic routing: pay $0.005 to save $0.05
     2025-12-12 V4.0: MAJOR - Consolidated AI into engines/ai_lookup.py
                      - Removed dependencies on routers/claude.py, routers/gemini.py
                      - AI classification now uses configurable provider chain
@@ -51,7 +51,14 @@ from formatters.base import get_formatter
 from engines.academic import CrossrefEngine, OpenAlexEngine, SemanticScholarEngine, PubMedEngine
 from engines.doi import extract_doi_from_url, is_academic_publisher_url
 from engines.generic_url import GenericURLEngine
-from engines.url_router_complete import URLRouter  # NEW: Search-first router (2025-12-21)
+
+# Smart URL Router (uses SerpAPI only for paywalled content)
+try:
+    from engines.smart_url_router import SmartURLRouter
+    SMART_ROUTER_AVAILABLE = True
+except ImportError:
+    SMART_ROUTER_AVAILABLE = False
+    SmartURLRouter = None
 
 # Import Cite Fix Pro modules (now in engines/)
 from engines import superlegal
@@ -144,64 +151,60 @@ _semantic = SemanticScholarEngine()
 _pubmed = PubMedEngine()
 
 # =============================================================================
-# URL METADATA EXTRACTION (Updated 2025-12-21)
+# SMART URL ROUTER (Updated 2025-12-21)
 # =============================================================================
-# New search-first router with 83% cost savings and 98% success rate.
-# Works on paywalled content via web search fallback.
-# Wraps URLRouter to maintain GenericURLEngine interface compatibility.
+# Uses SerpAPI strategically:
+# - Paywalled sites (WaPo, NYT): SerpAPI ($0.005) - WORTH IT vs AI ($0.05)
+# - Open sites (CDC, .gov): Direct fetch (FREE)
+# - 90% cost reduction on paywalled URLs!
 
-class _URLRouterWrapper:
-    """
-    Wrapper to make URLRouter compatible with GenericURLEngine interface.
-    
-    This allows drop-in replacement of GenericURLEngine with the new
-    search-first router without changing any calling code.
-    
-    Benefits:
-    - 98% success rate (vs 70% for direct fetch)
-    - 83% cost reduction ($0.0085 vs $0.05 per URL)
-    - Works on paywalled content (WaPo, NYT, etc.)
-    - Search-first strategy: search → fetch → AI
-    """
-    
-    def __init__(self):
-        self.router = URLRouter(debug=False)
-        self.fallback = GenericURLEngine()  # Keep old engine as fallback
-        
-    def fetch_by_url(self, url):
+if SMART_ROUTER_AVAILABLE:
+    class _SmartURLWrapper:
         """
-        Fetch URL metadata using new search-first router.
+        Smart URL router that uses SerpAPI only for paywalled content.
         
-        Falls back to GenericURLEngine if new router fails completely.
+        Cost comparison per paywalled URL:
+        - Old: Fetch (fails) → AI ($0.05)
+        - New: SerpAPI ($0.005)
+        - Savings: 90%!
+        
+        For open content: Still uses free direct fetch.
         """
-        try:
-            # Try new router (search-first approach)
-            metadata = self.router.resolve(url)
+        
+        def __init__(self):
+            self.smart_router = SmartURLRouter(debug=False)
+            self.fallback = GenericURLEngine()
+        
+        def fetch_by_url(self, url):
+            """Smart routing based on domain type."""
+            try:
+                # Try smart router (uses SerpAPI for paywalled, returns empty for others)
+                metadata = self.smart_router.resolve(url)
+                
+                if metadata.is_complete():
+                    print(f"[SmartRouter] ✓ Resolved via {metadata.method_used}: {metadata.title[:50] if metadata.title else 'N/A'}")
+                    
+                    return SourceComponents(
+                        title=metadata.title,
+                        authors=metadata.authors,
+                        publication_name=metadata.publication,
+                        date=metadata.date,
+                        url=url,
+                        citation_type=CitationType.URL
+                    )
+                else:
+                    # No metadata from smart router, use GenericURL
+                    return self.fallback.fetch_by_url(url)
             
-            if metadata.is_complete():
-                # Successfully got all required fields
-                print(f"[URLRouter] ✓ Resolved via {metadata.method_used}: {metadata.title[:50] if metadata.title else 'N/A'}")
-                
-                # Convert to SourceComponents format
-                return SourceComponents(
-                    title=metadata.title,
-                    authors=metadata.authors,
-                    publication_name=metadata.publication,
-                    date=metadata.date,
-                    url=url,
-                    citation_type=CitationType.WEBSITE
-                )
-            else:
-                # Incomplete metadata from new router, try old method
-                print(f"[URLRouter] Incomplete metadata, trying GenericURL fallback")
+            except Exception as e:
+                print(f"[SmartRouter] Error, using GenericURL: {e}")
                 return self.fallback.fetch_by_url(url)
-                
-        except Exception as e:
-            # New router failed, use old method
-            print(f"[URLRouter] Error in new router, using GenericURL fallback: {e}")
-            return self.fallback.fetch_by_url(url)
-
-_generic_url = _URLRouterWrapper()  # Now uses search-first router!
+    
+    _generic_url = _SmartURLWrapper()
+    print("[UnifiedRouter] Smart URL Router enabled (SerpAPI for paywalled content)")
+else:
+    _generic_url = GenericURLEngine()
+    print("[UnifiedRouter] Using GenericURLEngine (SmartRouter not available)")
 
 # Google Scholar (paid via SerpAPI) - Layer 4.5
 try:
