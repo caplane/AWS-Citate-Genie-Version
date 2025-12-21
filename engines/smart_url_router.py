@@ -87,9 +87,6 @@ class SmartURLRouter:
             print(f"[SmartURLRouter] Using SerpAPI for paywalled URL: {url[:60]}")
         
         try:
-            # Build search query from URL
-            query = self._build_search_query(url)
-            
             # Call SerpAPI
             params = {
                 'engine': 'google',
@@ -110,45 +107,77 @@ class SmartURLRouter:
             if response.status_code == 200:
                 data = response.json()
                 
+                if self.debug:
+                    print(f"[SmartURLRouter] SerpAPI response status: {response.status_code}")
+                    print(f"[SmartURLRouter] Organic results count: {len(data.get('organic_results', []))}")
+                
                 # Extract from organic results
                 results = data.get('organic_results', [])
                 if results:
                     result = results[0]
                     
-                    # Create metadata object
-                    metadata = type('Metadata', (), {
-                        'title': result.get('title'),
-                        'authors': self._extract_authors_from_snippet(result.get('snippet', '')),
-                        'publication': self._extract_domain(url).replace('.com', '').title(),
-                        'date': result.get('date'),
-                        'url': url,
-                        'method_used': 'serpapi',
-                        'is_complete': lambda: bool(result.get('title'))
-                    })()
+                    # Extract metadata
+                    title = result.get('title')
+                    snippet = result.get('snippet', '')
+                    date = result.get('date')
+                    authors = self._extract_authors_from_snippet(snippet)
+                    publication = self._extract_publication_name(url)
+                    
+                    if self.debug:
+                        print(f"[SmartURLRouter] Extracted title: {title}")
+                        print(f"[SmartURLRouter] Extracted authors: {authors}")
+                        print(f"[SmartURLRouter] Extracted date: {date}")
+                        print(f"[SmartURLRouter] Extracted publication: {publication}")
+                    
+                    # Create metadata object with actual values (not lambdas)
+                    class Metadata:
+                        def __init__(self):
+                            self.title = title
+                            self.authors = authors
+                            self.publication = publication
+                            self.date = date
+                            self.url = url
+                            self.method_used = 'serpapi'
+                        
+                        def is_complete(self):
+                            # Must have at least title to be useful
+                            return bool(self.title)
+                    
+                    metadata = Metadata()
                     
                     if self.debug:
                         print(f"[SmartURLRouter] ✓ SerpAPI found: {metadata.title[:50] if metadata.title else 'N/A'}")
+                        print(f"[SmartURLRouter] is_complete: {metadata.is_complete()}")
                     
                     return metadata
         
         except Exception as e:
             if self.debug:
                 print(f"[SmartURLRouter] SerpAPI error: {e}")
+            import traceback
+            if self.debug:
+                traceback.print_exc()
         
         # Failed - return empty to trigger fallback
+        if self.debug:
+            print(f"[SmartURLRouter] SerpAPI failed, returning empty metadata")
         return self._empty_metadata(url)
     
     def _empty_metadata(self, url: str):
         """Return empty metadata to trigger GenericURL fallback."""
-        return type('Metadata', (), {
-            'title': None,
-            'authors': [],
-            'publication': None,
-            'date': None,
-            'url': url,
-            'method_used': 'none',
-            'is_complete': lambda: False
-        })()
+        class EmptyMetadata:
+            def __init__(self):
+                self.title = None
+                self.authors = []
+                self.publication = None
+                self.date = None
+                self.url = url
+                self.method_used = 'none'
+            
+            def is_complete(self):
+                return False
+        
+        return EmptyMetadata()
     
     def _extract_domain(self, url: str) -> str:
         """Extract clean domain from URL."""
@@ -157,6 +186,33 @@ class SmartURLRouter:
         if domain.startswith('www.'):
             domain = domain[4:]
         return domain
+    
+    def _extract_publication_name(self, url: str) -> str:
+        """Extract publication name from domain."""
+        domain = self._extract_domain(url)
+        
+        # Map common domains to proper publication names
+        publication_map = {
+            'washingtonpost.com': 'Washington Post',
+            'nytimes.com': 'New York Times',
+            'wsj.com': 'Wall Street Journal',
+            'economist.com': 'The Economist',
+            'ft.com': 'Financial Times',
+            'bloomberg.com': 'Bloomberg',
+            'newyorker.com': 'The New Yorker',
+            'theatlantic.com': 'The Atlantic',
+            'wired.com': 'Wired',
+            'foreignaffairs.com': 'Foreign Affairs',
+            'scientificamerican.com': 'Scientific American',
+            'axios.com': 'Axios',
+            'npr.org': 'NPR',
+        }
+        
+        if domain in publication_map:
+            return publication_map[domain]
+        
+        # Fallback: capitalize domain name
+        return domain.replace('.com', '').replace('.org', '').replace('.net', '').title()
     
     def _build_search_query(self, url: str) -> str:
         """Build search query from URL for better results."""
