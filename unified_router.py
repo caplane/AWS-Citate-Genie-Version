@@ -238,27 +238,130 @@ def _score_author_position(result: SourceComponents, query: str) -> float:
         return 0.1
     
     # Common first names to skip when extracting author surname
+    # Includes American/English, European, Asian, Middle Eastern, African, Latin names
     COMMON_FIRST_NAMES = {
+        # American/English - Male
         'james', 'john', 'robert', 'michael', 'william', 'david', 'richard', 'joseph',
         'thomas', 'charles', 'christopher', 'daniel', 'matthew', 'anthony', 'mark',
         'donald', 'steven', 'paul', 'andrew', 'joshua', 'kenneth', 'kevin', 'brian',
         'george', 'edward', 'ronald', 'timothy', 'jason', 'jeffrey', 'ryan', 'jacob',
+        'benjamin', 'samuel', 'nicholas', 'jonathan', 'stephen', 'larry', 'justin',
+        'scott', 'brandon', 'raymond', 'gregory', 'frank', 'alexander', 'patrick',
+        'jack', 'dennis', 'jerry', 'tyler', 'aaron', 'jose', 'adam', 'nathan',
+        'henry', 'douglas', 'zachary', 'peter', 'kyle', 'noah', 'ethan', 'jeremy',
+        'walter', 'christian', 'keith', 'roger', 'terry', 'austin', 'sean', 'gerald',
+        'carl', 'harold', 'dylan', 'arthur', 'lawrence', 'jordan', 'jesse', 'bryan',
+        # American/English - Female
         'mary', 'patricia', 'jennifer', 'linda', 'elizabeth', 'barbara', 'susan',
         'jessica', 'sarah', 'karen', 'nancy', 'lisa', 'betty', 'margaret', 'sandra',
         'ashley', 'dorothy', 'kimberly', 'emily', 'donna', 'michelle', 'carol', 'amanda',
-        'eric', 'louis', 'peter', 'henry', 'arthur', 'albert', 'frank', 'raymond',
         'anna', 'ruth', 'helen', 'laura', 'marie', 'ann', 'jane', 'alice', 'grace',
-        'ilyon', 'emmanuel', 'leo', 'rachel', 'peggy', 'moishe'
+        'melissa', 'deborah', 'stephanie', 'rebecca', 'sharon', 'cynthia', 'kathleen',
+        'amy', 'angela', 'shirley', 'brenda', 'pamela', 'emma', 'nicole', 'helen',
+        'samantha', 'katherine', 'christine', 'debra', 'rachel', 'carolyn', 'janet',
+        'catherine', 'maria', 'heather', 'diane', 'olivia', 'julie', 'joyce', 'virginia',
+        # European - French
+        'jean', 'pierre', 'jacques', 'michel', 'philippe', 'alain', 'bernard', 'claude',
+        'francois', 'laurent', 'nicolas', 'christophe', 'antoine', 'olivier', 'pascal',
+        'marie', 'jeanne', 'marguerite', 'sophie', 'camille', 'charlotte', 'juliette',
+        # European - German
+        'hans', 'franz', 'karl', 'johann', 'friedrich', 'wilhelm', 'heinrich', 'werner',
+        'helmut', 'wolfgang', 'dieter', 'klaus', 'jurgen', 'gerhard', 'manfred', 'rolf',
+        'ursula', 'helga', 'ingrid', 'gisela', 'renate', 'monika', 'petra', 'sabine',
+        # European - Spanish/Portuguese
+        'jose', 'juan', 'carlos', 'miguel', 'antonio', 'francisco', 'luis', 'pedro',
+        'jorge', 'manuel', 'rafael', 'fernando', 'pablo', 'alberto', 'sergio', 'ricardo',
+        'maria', 'carmen', 'rosa', 'ana', 'isabel', 'lucia', 'elena', 'teresa', 'pilar',
+        'joao', 'paulo', 'andre', 'rodrigo', 'bruno', 'hugo', 'rui', 'nuno', 'tiago',
+        # European - Italian
+        'giuseppe', 'giovanni', 'antonio', 'mario', 'luigi', 'francesco', 'angelo',
+        'vincenzo', 'pietro', 'salvatore', 'carlo', 'franco', 'bruno', 'paolo', 'marco',
+        'giulia', 'francesca', 'chiara', 'sara', 'valentina', 'alessia', 'giorgia',
+        # European - Dutch/Scandinavian
+        'jan', 'pieter', 'willem', 'hendrik', 'cornelis', 'johannes', 'gerrit', 'dirk',
+        'erik', 'lars', 'anders', 'magnus', 'olaf', 'sven', 'bjorn', 'thor', 'leif',
+        'anna', 'ingrid', 'astrid', 'sigrid', 'freya', 'helga', 'karin', 'greta',
+        # European - Polish/Czech/Russian/Slavic
+        'jan', 'piotr', 'andrzej', 'krzysztof', 'stanislaw', 'tomasz', 'marek', 'michal',
+        'pavel', 'vaclav', 'jiri', 'josef', 'martin', 'petr', 'jaroslav', 'miroslav',
+        'ivan', 'dmitri', 'alexei', 'nikolai', 'sergei', 'vladimir', 'yuri', 'boris',
+        'mikhail', 'andrei', 'viktor', 'oleg', 'igor', 'pavel', 'konstantin', 'anatoly',
+        'anna', 'maria', 'elena', 'olga', 'natalia', 'tatiana', 'irina', 'svetlana',
+        # Chinese (pinyin romanization)
+        'wei', 'ming', 'jing', 'hong', 'hui', 'lei', 'yan', 'lin', 'fang', 'ying',
+        'xiao', 'ping', 'qiang', 'yong', 'jun', 'tao', 'hao', 'long', 'feng', 'cheng',
+        'xin', 'yu', 'jian', 'bo', 'gang', 'hai', 'peng', 'bin', 'nan', 'dong',
+        # Japanese
+        'takeshi', 'hiroshi', 'kenji', 'taro', 'ichiro', 'akira', 'yuki', 'haruki',
+        'kazuki', 'daisuke', 'shun', 'ryo', 'yusuke', 'ken', 'shin', 'makoto', 'satoshi',
+        'yoko', 'keiko', 'michiko', 'sachiko', 'tomoko', 'yumi', 'naomi', 'emi', 'mika',
+        # Korean
+        'joon', 'min', 'sung', 'young', 'hyun', 'jin', 'soo', 'hee', 'jung', 'eun',
+        'seung', 'dong', 'sang', 'woo', 'jun', 'ho', 'kyung', 'yeon', 'ji', 'sun',
+        # Indian/South Asian
+        'raj', 'amit', 'vikram', 'anil', 'sunil', 'sanjay', 'ravi', 'ashok', 'ramesh',
+        'deepak', 'rajesh', 'suresh', 'manoj', 'vijay', 'ajay', 'rakesh', 'pradeep',
+        'krishna', 'arjun', 'rahul', 'nikhil', 'arun', 'anand', 'kumar', 'mohan',
+        'priya', 'neha', 'pooja', 'sunita', 'anita', 'rekha', 'kavita', 'shalini',
+        'meena', 'geeta', 'rita', 'seema', 'shobha', 'usha', 'lata', 'nisha', 'swati',
+        # Middle Eastern/Arabic
+        'mohammed', 'muhammad', 'ahmed', 'ali', 'omar', 'hassan', 'hussein', 'khalid',
+        'abdullah', 'abdul', 'ibrahim', 'yusuf', 'mustafa', 'nasser', 'samir', 'tariq',
+        'karim', 'rashid', 'jamal', 'faisal', 'walid', 'adel', 'nabil', 'hani', 'ziad',
+        'fatima', 'aisha', 'maryam', 'layla', 'nadia', 'sara', 'hana', 'dina', 'rania',
+        # Hebrew/Israeli
+        'david', 'daniel', 'moshe', 'yosef', 'abraham', 'isaac', 'jacob', 'aaron',
+        'eli', 'avi', 'yossi', 'ilan', 'oren', 'eyal', 'gideon', 'noam', 'amit', 'oded',
+        'rachel', 'sarah', 'miriam', 'esther', 'ruth', 'leah', 'tamar', 'yael', 'maya',
+        'moishe', 'ilyon', 'emmanuel', 'leo', 'peggy',
+        # African
+        'kwame', 'kofi', 'ama', 'akua', 'yaw', 'abena', 'adjoa', 'adwoa', 'efua',
+        'chidi', 'chinedu', 'emeka', 'obinna', 'uchenna', 'ngozi', 'chioma', 'adaeze',
+        'oluwaseun', 'olumide', 'adebayo', 'olufemi', 'tunde', 'segun', 'yemi', 'bola',
+        # Latin American (additional to Spanish/Portuguese)
+        'guadalupe', 'esperanza', 'socorro', 'consuelo', 'dolores', 'luz', 'mercedes',
+        'raul', 'oscar', 'cesar', 'hector', 'victor', 'julio', 'armando', 'alfredo',
+        # Greek
+        'nikos', 'kostas', 'giorgos', 'dimitris', 'yannis', 'petros', 'thanasis',
+        'maria', 'eleni', 'katerina', 'sofia', 'anna', 'georgia', 'christina',
+        # Turkish
+        'mehmet', 'mustafa', 'ahmet', 'ali', 'hasan', 'huseyin', 'ibrahim', 'ismail',
+        'fatma', 'ayse', 'emine', 'hatice', 'zeynep', 'elif', 'merve', 'esra',
+        # Vietnamese
+        'nguyen', 'tran', 'anh', 'minh', 'duc', 'huy', 'nam', 'tuan', 'hung', 'long',
+        'linh', 'mai', 'lan', 'huong', 'nga', 'thao', 'trang', 'yen', 'hanh', 'phuong',
     }
     
     # Common non-name words that might appear capitalized at start of query
+    # Includes words commonly found in book/article titles that aren't surnames
     SKIP_WORDS = {
+        # Question words
         'how', 'what', 'when', 'where', 'why', 'who', 'which', 'whose',
+        # Articles and prepositions
         'the', 'did', 'does', 'was', 'were', 'are', 'has', 'had', 'have',
         'can', 'could', 'should', 'would', 'will', 'may', 'might', 'must',
         'this', 'that', 'these', 'those', 'from', 'with', 'about', 'into',
+        # Common title/subject words
         'history', 'origins', 'emergence', 'rise', 'fall', 'decline',
-        'introduction', 'review', 'analysis', 'study', 'case', 'cases'
+        'introduction', 'review', 'analysis', 'study', 'case', 'cases',
+        # Relationship/social terms often in titles
+        'master', 'slave', 'husband', 'wife', 'father', 'mother', 'son', 'daughter',
+        'brother', 'sister', 'family', 'marriage', 'love', 'death', 'life', 'war',
+        'peace', 'power', 'mind', 'body', 'soul', 'spirit', 'heart', 'brain',
+        # Common adjectives in titles
+        'american', 'british', 'french', 'german', 'chinese', 'japanese', 'russian',
+        'modern', 'ancient', 'new', 'old', 'great', 'little', 'big', 'small',
+        'first', 'last', 'final', 'secret', 'hidden', 'lost', 'found',
+        # Academic/genre terms
+        'theory', 'practice', 'science', 'art', 'culture', 'society', 'nature',
+        'politics', 'economics', 'psychology', 'philosophy', 'religion', 'law',
+        'medicine', 'health', 'education', 'technology', 'digital', 'social',
+        # Action words often starting titles
+        'making', 'breaking', 'building', 'creating', 'finding', 'losing',
+        'becoming', 'being', 'thinking', 'feeling', 'living', 'dying',
+        # Common book title patterns
+        'games', 'rules', 'secrets', 'stories', 'tales', 'letters', 'notes',
+        'memoirs', 'confessions', 'adventures', 'journey', 'quest', 'search',
     }
     
     # Extract potential author surname from query

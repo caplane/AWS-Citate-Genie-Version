@@ -38,10 +38,38 @@ LEGAL_PATTERNS = [
     re.compile(r'\[\d{4}\]\s+[A-Z]+(?:\s+[A-Za-z]+)*\s+\d+'),  # UK neutral citation
 ]
 
-# Book patterns
+# Book patterns - expanded to catch various book citation formats
 BOOK_PATTERNS = [
+    # ISBN patterns
     re.compile(r'ISBN[:\s]*[\d\-X]+', re.IGNORECASE),
-    re.compile(r'\([\w\s]+(?:Press|Publishers?|Books?),?\s*\d{4}\)', re.IGNORECASE),
+    re.compile(r'\b97[89][\d\-]{10,}', re.IGNORECASE),  # ISBN-13 starting with 978/979
+    
+    # Publisher in parentheses: (New York: Oxford University Press, 1998)
+    re.compile(r'\([^)]*:\s*[^)]+(?:Press|Publishers?|Books?|Publishing)[^)]*,\s*\d{4}\)', re.IGNORECASE),
+    
+    # Publisher without city: (Oxford University Press, 1998)
+    re.compile(r'\([\w\s]+(?:Press|Publishers?|Books?|Publishing),?\s*\d{4}\)', re.IGNORECASE),
+    
+    # Common academic/trade publishers (without Press/Books suffix)
+    re.compile(r'\(\s*(?:Knopf|Random\s*House|Penguin|HarperCollins|Simon\s*&\s*Schuster|Macmillan|Routledge|Sage|Wiley|Springer|Elsevier|Cambridge|Oxford|Harvard|Yale|Princeton|MIT|Chicago|Stanford|Duke|Cornell|Columbia|Berkeley|Michigan|Indiana|Minnesota|Wisconsin|Penn|Northwestern|Johns\s*Hopkins|Georgetown|NYU|Vintage|Anchor|Doubleday|Norton|Farrar|Houghton|Little\s*Brown|Scribner|Crown|Pantheon|Basic|Free\s*Press|Hill\s*and\s*Wang|Grove|Beacon|Riverhead|Ecco|Bloomsbury|Verso|Polity|Palgrave|Academic\s*Press|W\.?\s*H\.?\s*Freeman|Henry\s*Holt|Holt|McGraw[\s\-]*Hill|Addison[\s\-]*Wesley|Pearson|Cengage|Thomson|Worth|Guilford|Lawrence\s*Erlbaum|Psychology\s*Press|Taylor\s*&\s*Francis|Blackwell|John\s*Wiley|Jossey[\s\-]*Bass|Westview|Praeger|Greenwood|Rowman|Lexington|Transaction|M\.?\s*E\.?\s*Sharpe|Ashgate|Edward\s*Elgar|De\s*Gruyter|Brill|Kluwer|IOS|World\s*Scientific|CRC|Marcel\s*Dekker|Humana|Lippincott|Mosby|Saunders|Thieme|Karger)\b[^)]*,?\s*\d{4}\)', re.IGNORECASE),
+    
+    # "ed." or "eds." indicating edited volume
+    re.compile(r'\bed(?:s)?\.?\s*(?:by\s+)?[A-Z][a-z]+', re.IGNORECASE),
+    
+    # "trans." or "translated by" 
+    re.compile(r'\btrans(?:lated)?\.?\s*(?:by\s+)?[A-Z][a-z]+', re.IGNORECASE),
+    
+    # Edition indicators: "2nd ed.", "revised edition", etc.
+    re.compile(r'\b(?:\d+(?:st|nd|rd|th)|revised|expanded|updated|abridged)\s+ed(?:ition)?\.?\b', re.IGNORECASE),
+    
+    # Volume/chapter in book: "vol. 2" or "chapter 5" (but not journal volumes)
+    re.compile(r'\bchapter\s+\d+\b', re.IGNORECASE),
+    
+    # "In" followed by italicized/quoted title (book chapter pattern)
+    re.compile(r'\bIn\s+[A-Z][^,]+,\s*ed(?:s)?\.?\s+(?:by\s+)?[A-Z]', re.IGNORECASE),
+    
+    # City: Publisher pattern without parentheses
+    re.compile(r'\b(?:New\s*York|London|Cambridge|Oxford|Chicago|Boston|Philadelphia|Princeton|Berkeley|Stanford|Durham|Chapel\s*Hill|Ithaca|New\s*Haven|Baltimore|Los\s*Angeles|San\s*Francisco|Washington|Toronto|Montreal|Paris|Berlin|Amsterdam|Tokyo):\s*[A-Z][\w\s&]+,\s*\d{4}\b', re.IGNORECASE),
 ]
 
 # Interview patterns
