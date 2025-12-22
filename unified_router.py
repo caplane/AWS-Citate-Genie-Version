@@ -1917,15 +1917,45 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
             formatted = formatter.format(meta)
             results.append((meta, formatted, "Famous Papers"))
         
-        # Query multiple engines
-        try:
-            metadatas = _crossref.search_multiple(query, limit)
-            for meta in metadatas:
-                if meta and meta.has_minimum_data():
-                    formatted = formatter.format(meta)
-                    results.append((meta, formatted, "Crossref"))
-        except Exception:
-            pass
+        # FOR UNKNOWN QUERIES: Search books FIRST
+        # Queries like "caplan mind games" or "master slave husband" are more likely
+        # to be book searches than journal article searches.
+        if detection.citation_type == CitationType.UNKNOWN:
+            try:
+                print(f"[UnifiedRouter] UNKNOWN query - searching books FIRST: {query[:50]}...")
+                book_results = books.search_all_engines(query)
+                print(f"[UnifiedRouter] Book engines returned {len(book_results)} results")
+                for data in book_results:
+                    if len(results) >= limit:
+                        break
+                    meta = _book_dict_to_components(data, query)
+                    if meta and meta.has_minimum_data():
+                        formatted = formatter.format(meta)
+                        source = data.get('source_engine', 'Google Books')
+                        results.append((meta, formatted, source))
+                        print(f"[UnifiedRouter] ✓ Added book: {meta.title[:50]}...")
+            except Exception as e:
+                print(f"[UnifiedRouter] Book engines error: {e}")
+        
+        # Query Crossref (academic articles)
+        if len(results) < limit:
+            try:
+                metadatas = _crossref.search_multiple(query, limit)
+                for meta in metadatas:
+                    if len(results) >= limit:
+                        break
+                    if meta and meta.has_minimum_data():
+                        # Check for duplicates against book results
+                        is_duplicate = any(
+                            meta.title and r[0].title and 
+                            meta.title.lower()[:30] == r[0].title.lower()[:30]
+                            for r in results
+                        )
+                        if not is_duplicate:
+                            formatted = formatter.format(meta)
+                            results.append((meta, formatted, "Crossref"))
+            except Exception:
+                pass
         
         # Add Semantic Scholar results
         if len(results) < limit:
@@ -1979,17 +2009,16 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
         #     gs_result = _google_scholar.search(query)
         #     ...
         
-        # Also search book engines (Google Books, Library of Congress, Open Library)
-        # Many queries could be books misclassified as journals
-        if len(results) < limit:
+        # For JOURNAL/MEDICAL types (not UNKNOWN), also search books as fallback
+        if detection.citation_type != CitationType.UNKNOWN and len(results) < limit:
             try:
+                print(f"[UnifiedRouter] Searching book engines as fallback: {query[:50]}...")
                 book_results = books.search_all_engines(query)
                 for data in book_results:
                     if len(results) >= limit:
                         break
                     meta = _book_dict_to_components(data, query)
                     if meta and meta.has_minimum_data():
-                        # Check for duplicates
                         is_duplicate = any(
                             meta.title and r[0].title and 
                             meta.title.lower()[:30] == r[0].title.lower()[:30]
@@ -1999,10 +2028,9 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
                             formatted = formatter.format(meta)
                             source = data.get('source_engine', 'Google Books')
                             results.append((meta, formatted, source))
+                            print(f"[UnifiedRouter] ✓ Added book: {meta.title[:50]}...")
             except Exception as e:
                 print(f"[UnifiedRouter] Book engines error: {e}")
-            except Exception:
-                pass
     
     elif detection.citation_type == CitationType.BOOK:
         # Query ALL book engines (Google Books, Library of Congress, Open Library)
