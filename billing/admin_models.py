@@ -132,6 +132,15 @@ class DocumentSession(Base):
     status = Column(String(50), default='processing')  # processing, completed, failed
     error_message = Column(Text)
     
+    # Resolution tracking (user acceptance metrics)
+    # Success = accepted_original + accepted_alternative + minor_edit
+    # Failure = user_provided
+    resolution_accepted_original = Column(Integer, default=0)
+    resolution_accepted_alternative = Column(Integer, default=0)
+    resolution_minor_edit = Column(Integer, default=0)
+    resolution_user_provided = Column(Integer, default=0)
+    resolution_success_rate = Column(Float)  # Percentage (0-100)
+    
     # Relationships
     api_calls = relationship('APICall', back_populates='document_session', lazy='dynamic')
     
@@ -360,3 +369,68 @@ Index('idx_accepted_session', AcceptedCitation.session_id)
 Index('idx_accepted_user', AcceptedCitation.user_id)
 Index('idx_accepted_type', AcceptedCitation.citation_type)
 Index('idx_accepted_at', AcceptedCitation.accepted_at)
+
+
+# =============================================================================
+# RESOLUTION EVENT MODEL
+# =============================================================================
+
+class ResolutionEvent(Base):
+    """
+    Tracks user acceptance of citation recommendations.
+    
+    Success Definition:
+        CitateGenie "succeeds" when user accepts the recommendation or makes minor edits.
+        CitateGenie "fails" when user provides their own citation.
+    
+    Resolution Types:
+        - accepted_original: User accepted recommendation as-is (>=95% similar)
+        - accepted_alternative: User selected an alternative from search results
+        - minor_edit: User made small edits (80-95% similar)
+        - user_provided: User provided their own citation (<80% similar) - FAILURE
+    
+    Populated when user clicks Accept & Save in the workbench.
+    """
+    __tablename__ = 'resolution_events'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Links
+    document_session_id = Column(Integer, ForeignKey('document_sessions.id'), nullable=True, index=True)
+    session_id = Column(String(100), nullable=False, index=True)
+    citation_id = Column(Integer, nullable=False)  # note_id in document
+    
+    # Resolution outcome
+    resolution_type = Column(String(50), nullable=False, index=True)
+    
+    # Text comparison
+    original_text = Column(Text)           # What CitateGenie recommended
+    final_text = Column(Text)              # What user accepted/saved
+    similarity_ratio = Column(Float)       # 0.0-1.0
+    
+    # Alternative tracking
+    alternative_index = Column(Integer)    # Which alternative selected (0, 1, 2...) or NULL
+    
+    # Source tracking - which engine produced the accepted citation
+    source_engine = Column(String(100), index=True)  # crossref, pubmed, ai_lookup, etc.
+    
+    # Context
+    citation_style = Column(String(50))    # chicago, apa, mla, etc.
+    citation_type = Column(String(50))     # journal, book, legal, etc.
+    
+    # Timestamp
+    recorded_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    
+    # Relationship
+    document_session = relationship('DocumentSession', backref='resolution_events')
+    
+    def __repr__(self):
+        return f'<ResolutionEvent {self.id} {self.resolution_type}>'
+
+
+# Indexes for resolution events
+Index('idx_resolution_session_id', ResolutionEvent.session_id)
+Index('idx_resolution_doc_session', ResolutionEvent.document_session_id)
+Index('idx_resolution_type', ResolutionEvent.resolution_type)
+Index('idx_resolution_source_engine', ResolutionEvent.source_engine)
+Index('idx_resolution_recorded_at', ResolutionEvent.recorded_at)

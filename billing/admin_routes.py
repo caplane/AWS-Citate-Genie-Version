@@ -459,9 +459,9 @@ DASHBOARD_HTML = """
                     <div class="stat-sub">${data.citations_failed} failed</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Success Rate</div>
-                    <div class="stat-value ${parseFloat(successRate) >= 80 ? 'success' : 'fail'}">${successRate}%</div>
-                    <div class="stat-sub">of API calls</div>
+                    <div class="stat-label">Resolution Rate</div>
+                    <div class="stat-value ${parseFloat(data.resolution_success_rate || 0) >= 80 ? 'success' : 'fail'}">${(data.resolution_success_rate || 0).toFixed(1)}%</div>
+                    <div class="stat-sub">correct citations generated</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Median Cost/Doc</div>
@@ -778,6 +778,41 @@ def api_stats():
         rounded_costs = [round(c, 4) for c in costs]
         mode_cost = Counter(rounded_costs).most_common(1)[0][0] if rounded_costs else 0
     
+    # Get resolution stats
+    resolution_success_rate = 0
+    resolution_total = 0
+    resolution_by_type = {}
+    try:
+        from billing.admin_models import ResolutionEvent
+        
+        resolution_counts = db.query(
+            ResolutionEvent.resolution_type,
+            func.count(ResolutionEvent.id)
+        ).filter(
+            ResolutionEvent.recorded_at >= start_date,
+            ResolutionEvent.recorded_at < end_date
+        ).group_by(
+            ResolutionEvent.resolution_type
+        ).all()
+        
+        resolution_by_type = {
+            'accepted_original': 0,
+            'accepted_alternative': 0,
+            'minor_edit': 0,
+            'user_provided': 0
+        }
+        for res_type, count in resolution_counts:
+            if res_type in resolution_by_type:
+                resolution_by_type[res_type] = count
+        
+        resolution_total = sum(resolution_by_type.values())
+        successes = (resolution_by_type['accepted_original'] + 
+                    resolution_by_type['accepted_alternative'] + 
+                    resolution_by_type['minor_edit'])
+        resolution_success_rate = round(successes * 100.0 / resolution_total, 1) if resolution_total > 0 else 0
+    except Exception as e:
+        print(f"[Admin] Error getting resolution stats: {e}")
+    
     return jsonify({
         'total_cost': total_cost,
         'call_count': call_count,
@@ -788,6 +823,9 @@ def api_stats():
         'citations_failed': citations_failed or 0,
         'median_cost_per_doc': median_cost,
         'mode_cost_per_doc': mode_cost,
+        'resolution_success_rate': resolution_success_rate,
+        'resolution_total': resolution_total,
+        'resolution_by_type': resolution_by_type,
         'period': period
     })
 
