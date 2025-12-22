@@ -2695,6 +2695,7 @@
             const cite = currentCitations[activeCitationIndex];
             const newText = document.getElementById('ad-final-textarea').value;
             const citationId = cite.id || cite.note_id;
+            const originalText = cite.formatted || cite.original || '';
             
             const btn = document.getElementById('ad-commit-btn');
             const originalHtml = btn.innerHTML;
@@ -2707,10 +2708,20 @@
                 const selectedAlt = window.adFreshAlternatives?.[selectedAltIdx];
                 
                 let response;
+                let resolutionData = {
+                    original_text: originalText,
+                    final_text: newText,
+                    source_engine: cite.source_engine || cite.source || null,
+                    citation_type: cite.citation_type || cite.type || null
+                };
                 
                 // CASE 1: User selected an alternative recommendation
                 // → Save with full metadata from the alternative
                 if (selectedAlt && newText === selectedAlt.citation) {
+                    resolutionData.alternative_index = selectedAltIdx;
+                    resolutionData.source_engine = selectedAlt.source || resolutionData.source_engine;
+                    resolutionData.citation_type = selectedAlt.type || resolutionData.citation_type;
+                    
                     response = await fetch('/api/accept-reference', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -2718,6 +2729,7 @@
                             session_id: currentSessionId,
                             citation_id: citationId,
                             selected_option: selectedAltIdx,
+                            resolution: resolutionData,  // Pass resolution tracking data
                             option: {
                                 formatted: selectedAlt.citation,
                                 title: selectedAlt.metadata?.title || '',
@@ -2747,22 +2759,42 @@
                             session_id: currentSessionId,
                             reference_id: citationId,
                             formatted: newText,
+                            resolution: resolutionData,  // Pass resolution tracking data
                             style: currentStyle
                         })
                     });
                 }
-                // CASE 3: User edited or replaced text with something new
-                // → Trigger Layer 2 verification to extract SourceComponents
+                // CASE 3: User edited text - check similarity
                 else {
-                    btn.innerHTML = originalHtml;
-                    btn.disabled = false;
-                    adSaveInProgress = false;
+                    const similarity = calculateSimilarity(originalText, newText);
+                    resolutionData.similarity = similarity;
                     
-                    await triggerVerification(citationId, newText, 'author-date');
-                    return;  // Exit - verification modal handles the rest
+                    // If >80% similar, treat as minor edit and save directly
+                    if (similarity >= 0.80) {
+                        response = await fetch('/api/accept-reference', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                session_id: currentSessionId,
+                                reference_id: citationId,
+                                formatted: newText,
+                                resolution: resolutionData,  // Pass resolution tracking data
+                                style: currentStyle
+                            })
+                        });
+                    }
+                    // If <80% similar, trigger verification modal (user provided their own)
+                    else {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        adSaveInProgress = false;
+                        
+                        await triggerVerification(citationId, newText, 'author-date');
+                        return;  // Exit - verification modal handles the rest
+                    }
                 }
                 
-                // Handle response for CASE 1 and CASE 2
+                // Handle response for CASE 1, CASE 2, and minor edits
                 const data = await response.json();
                 
                 if (data.success) {
@@ -2956,6 +2988,7 @@
             const cite = currentCitations[fnActiveIndex];
             const noteId = cite.id || fnActiveIndex + 1;
             const newText = document.getElementById('fn-final-textarea').value;
+            const originalText = cite.formatted || cite.original || '';
             
             const btn = document.getElementById('fn-commit-btn');
             const originalHtml = btn.innerHTML;
@@ -2967,11 +3000,21 @@
             
             try {
                 let res;
+                let resolutionData = {
+                    original_text: originalText,
+                    final_text: newText,
+                    source_engine: cite.source_engine || cite.source || null,
+                    citation_type: cite.citation_type || cite.type || null
+                };
                 
                 // CASE 1: User selected an alternative recommendation
                 // → Save with full metadata from the alternative
                 if (fnSelectedOptionIndex !== null && window.fnAlternatives?.[fnSelectedOptionIndex]) {
                     const selectedAlt = window.fnAlternatives[fnSelectedOptionIndex];
+                    resolutionData.alternative_index = fnSelectedOptionIndex;
+                    resolutionData.source_engine = selectedAlt.source || resolutionData.source_engine;
+                    resolutionData.citation_type = selectedAlt.type || resolutionData.citation_type;
+                    
                     res = await fetch('/api/accept-reference', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -2979,6 +3022,7 @@
                             session_id: currentSessionId,
                             citation_id: noteId,
                             selected_option: fnSelectedOptionIndex,
+                            resolution: resolutionData,  // Pass resolution tracking data
                             // Pass full metadata for backend to store
                             option: {
                                 formatted: selectedAlt.citation,
@@ -3010,20 +3054,39 @@
                         body: JSON.stringify({ 
                             session_id: currentSessionId, 
                             note_id: noteId, 
-                            html: newText 
+                            html: newText,
+                            resolution: resolutionData  // Pass resolution tracking data
                         })
                     });
                 }
-                // CASE 3: User edited or replaced text with something new
-                // → Trigger Layer 2 verification to extract SourceComponents
+                // CASE 3: User edited text - check similarity
                 else {
-                    btn.innerHTML = originalHtml;
-                    btn.disabled = false;
-                    fnSaveInProgress = false;
+                    const similarity = calculateSimilarity(originalText, newText);
+                    resolutionData.similarity = similarity;
                     
-                    // Trigger verification modal
-                    await triggerVerification(noteId, newText, 'footnote');
-                    return;  // Exit early - verification modal will handle the rest
+                    // If >80% similar, treat as minor edit and save directly
+                    if (similarity >= 0.80) {
+                        res = await fetch('/api/update', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ 
+                                session_id: currentSessionId, 
+                                note_id: noteId, 
+                                html: newText,
+                                resolution: resolutionData  // Pass resolution tracking data
+                            })
+                        });
+                    }
+                    // If <80% similar, trigger verification modal (user provided their own)
+                    else {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        fnSaveInProgress = false;
+                        
+                        // Trigger verification modal
+                        await triggerVerification(noteId, newText, 'footnote');
+                        return;  // Exit early - verification modal will handle the rest
+                    }
                 }
                 
                 // Handle response for CASE 1 and CASE 2
@@ -3283,6 +3346,49 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        /**
+         * Calculate similarity ratio between two strings (0.0 to 1.0).
+         * Uses a simple approach based on longest common subsequence.
+         * 80%+ similarity = minor edit, <80% = significant change
+         */
+        function calculateSimilarity(str1, str2) {
+            if (!str1 && !str2) return 1.0;
+            if (!str1 || !str2) return 0.0;
+            
+            // Normalize: lowercase, collapse whitespace
+            const s1 = str1.toLowerCase().replace(/\s+/g, ' ').trim();
+            const s2 = str2.toLowerCase().replace(/\s+/g, ' ').trim();
+            
+            if (s1 === s2) return 1.0;
+            
+            // Simple Levenshtein-based similarity
+            const len1 = s1.length;
+            const len2 = s2.length;
+            const maxLen = Math.max(len1, len2);
+            
+            if (maxLen === 0) return 1.0;
+            
+            // Create distance matrix
+            const matrix = Array(len1 + 1).fill(null).map(() => Array(len2 + 1).fill(0));
+            
+            for (let i = 0; i <= len1; i++) matrix[i][0] = i;
+            for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+            
+            for (let i = 1; i <= len1; i++) {
+                for (let j = 1; j <= len2; j++) {
+                    const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+                    matrix[i][j] = Math.min(
+                        matrix[i - 1][j] + 1,      // deletion
+                        matrix[i][j - 1] + 1,      // insertion
+                        matrix[i - 1][j - 1] + cost // substitution
+                    );
+                }
+            }
+            
+            const distance = matrix[len1][len2];
+            return 1.0 - (distance / maxLen);
         }
 
         // =============================================================================
@@ -3618,6 +3724,21 @@
             `;
             
             try {
+                // Build resolution tracking data
+                // If user selected 'original', they kept their own text (user_provided)
+                // If user selected an option from search results (accepted_alternative)
+                const isUserProvided = verifySelectedOption === 'original';
+                const selectedOpt = isUserProvided ? null : verifyModalOptions?.[verifySelectedOption];
+                
+                const resolutionData = {
+                    original_text: verifyModalOriginalText,
+                    final_text: isUserProvided ? verifyModalOriginalText : (selectedOpt?.formatted || ''),
+                    alternative_index: isUserProvided ? null : verifySelectedOption,
+                    source_engine: selectedOpt?.source || null,
+                    citation_type: selectedOpt?.citation_type || null,
+                    is_user_provided: isUserProvided
+                };
+                
                 const response = await fetch('/api/confirm-verified', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3625,7 +3746,8 @@
                         session_id: currentSessionId,
                         citation_id: verifyModalCitationId,
                         selected_option: verifySelectedOption,
-                        style: currentStyle
+                        style: currentStyle,
+                        resolution: resolutionData  // Pass resolution tracking data
                     })
                 });
                 
