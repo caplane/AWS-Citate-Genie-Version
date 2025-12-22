@@ -2685,9 +2685,12 @@
                 const selectedAltIdx = window.adSelectedAlternativeIdx;
                 const selectedAlt = window.adFreshAlternatives?.[selectedAltIdx];
                 
-                // If text matches a selected alternative, save with metadata
+                let response;
+                
+                // CASE 1: User selected an alternative recommendation
+                // → Save with full metadata from the alternative
                 if (selectedAlt && newText === selectedAlt.citation) {
-                    const response = await fetch('/api/accept-reference', {
+                    response = await fetch('/api/accept-reference', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -2712,45 +2715,62 @@
                             style: currentStyle
                         })
                     });
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        cite.formatted = newText;
-                        cite.accepted = true;
-                        window.adSelectedAlternativeIdx = null;  // Reset
-                        
-                        renderCitationList();
-                        updateAcceptedCount();
-                        updateProgressBadge();
-                        
-                        btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
-                        btn.classList.add('success');
-                        
-                        setTimeout(() => {
-                            btn.innerHTML = originalHtml;
-                            btn.classList.remove('success');
-                            btn.disabled = false;
-                            adSaveInProgress = false;
-                            
-                            if (currentCitations.every(c => c.accepted)) {
-                                showSuccessPanel();
-                            } else {
-                                const next = currentCitations.findIndex((c, i) => i > activeCitationIndex && !c.accepted);
-                                if (next !== -1) selectCitation(next);
-                            }
-                        }, 800);
-                    } else {
-                        throw new Error(data.error || 'Save failed');
-                    }
-                } else {
-                    // User manually edited or entered own text - trigger Layer 2 verification
+                }
+                // CASE 2: User accepting original/default recommendation (text unchanged)
+                // → Save directly, metadata already exists from initial processing
+                else if (newText === cite.formatted || newText === cite.original) {
+                    response = await fetch('/api/accept-reference', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: currentSessionId,
+                            reference_id: citationId,
+                            formatted: newText,
+                            style: currentStyle
+                        })
+                    });
+                }
+                // CASE 3: User edited or replaced text with something new
+                // → Trigger Layer 2 verification to extract SourceComponents
+                else {
                     btn.innerHTML = originalHtml;
                     btn.disabled = false;
                     adSaveInProgress = false;
                     
                     await triggerVerification(citationId, newText, 'author-date');
                     return;  // Exit - verification modal handles the rest
+                }
+                
+                // Handle response for CASE 1 and CASE 2
+                const data = await response.json();
+                
+                if (data.success) {
+                    cite.formatted = newText;
+                    cite.accepted = true;
+                    window.adSelectedAlternativeIdx = null;  // Reset
+                    
+                    renderCitationList();
+                    updateAcceptedCount();
+                    updateProgressBadge();
+                    
+                    btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                    btn.classList.add('success');
+                    
+                    setTimeout(() => {
+                        btn.innerHTML = originalHtml;
+                        btn.classList.remove('success');
+                        btn.disabled = false;
+                        adSaveInProgress = false;
+                        
+                        if (currentCitations.every(c => c.accepted)) {
+                            showSuccessPanel();
+                        } else {
+                            const next = currentCitations.findIndex((c, i) => i > activeCitationIndex && !c.accepted);
+                            if (next !== -1) selectCitation(next);
+                        }
+                    }, 800);
+                } else {
+                    throw new Error(data.error || 'Save failed');
                 }
             } catch (error) {
                 btn.innerHTML = originalHtml;
@@ -2911,7 +2931,8 @@
             try {
                 let res;
                 
-                // If user selected an alternative, use accept-reference to preserve metadata
+                // CASE 1: User selected an alternative recommendation
+                // → Save with full metadata from the alternative
                 if (fnSelectedOptionIndex !== null && window.fnAlternatives?.[fnSelectedOptionIndex]) {
                     const selectedAlt = window.fnAlternatives[fnSelectedOptionIndex];
                     res = await fetch('/api/accept-reference', {
@@ -2942,49 +2963,23 @@
                             }
                         })
                     });
-                    
-                    const data = await res.json();
-                
-                    if (data.success) {
-                        currentCitations[fnActiveIndex].formatted = newText;
-                        if (!currentCitations[fnActiveIndex].success) fnSuccessCount++;
-                        currentCitations[fnActiveIndex].success = true;
-                        fnSelectedOptionIndex = null;  // Reset after successful save
-                        
-                        if (!silent) fnJustSaved = true;
-                        else fnSaveInProgress = false;
-                        
-                        fnRenderCitationList();
-                        fnUpdateProgressBadge();
-                        
-                        if (!silent) {
-                            btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
-                            btn.classList.add('success');
-                            
-                            setTimeout(() => {
-                                btn.innerHTML = originalHtml;
-                                btn.classList.remove('success');
-                                btn.disabled = false;
-                                fnSaveInProgress = false;
-                                
-                                if (fnActiveIndex < currentCitations.length - 1) {
-                                    fnNavigate(1);
-                                } else if (currentCitations.every(c => c.success)) {
-                                    showFnSuccess();
-                                }
-                            }, 800);
-                        }
-                    } else {
-                        if (!silent) {
-                            btn.innerHTML = originalHtml;
-                            btn.disabled = false;
-                            alert('Failed to save');
-                        }
-                        fnSaveInProgress = false;
-                    }
-                } else {
-                    // Manual edit/replacement - trigger Layer 2 verification
-                    // This ensures user edits go through extraction to capture SourceComponents
+                }
+                // CASE 2: User accepting original/default recommendation (text unchanged)
+                // → Save directly, metadata already exists from initial processing
+                else if (newText === cite.formatted || newText === cite.original) {
+                    res = await fetch('/api/update', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            session_id: currentSessionId, 
+                            note_id: noteId, 
+                            html: newText 
+                        })
+                    });
+                }
+                // CASE 3: User edited or replaced text with something new
+                // → Trigger Layer 2 verification to extract SourceComponents
+                else {
                     btn.innerHTML = originalHtml;
                     btn.disabled = false;
                     fnSaveInProgress = false;
@@ -2992,6 +2987,47 @@
                     // Trigger verification modal
                     await triggerVerification(noteId, newText, 'footnote');
                     return;  // Exit early - verification modal will handle the rest
+                }
+                
+                // Handle response for CASE 1 and CASE 2
+                const data = await res.json();
+            
+                if (data.success) {
+                    currentCitations[fnActiveIndex].formatted = newText;
+                    if (!currentCitations[fnActiveIndex].success) fnSuccessCount++;
+                    currentCitations[fnActiveIndex].success = true;
+                    fnSelectedOptionIndex = null;  // Reset after successful save
+                    
+                    if (!silent) fnJustSaved = true;
+                    else fnSaveInProgress = false;
+                    
+                    fnRenderCitationList();
+                    fnUpdateProgressBadge();
+                    
+                    if (!silent) {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+                        btn.classList.add('success');
+                        
+                        setTimeout(() => {
+                            btn.innerHTML = originalHtml;
+                            btn.classList.remove('success');
+                            btn.disabled = false;
+                            fnSaveInProgress = false;
+                            
+                            if (fnActiveIndex < currentCitations.length - 1) {
+                                fnNavigate(1);
+                            } else if (currentCitations.every(c => c.success)) {
+                                showFnSuccess();
+                            }
+                        }, 800);
+                    }
+                } else {
+                    if (!silent) {
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        alert('Failed to save');
+                    }
+                    fnSaveInProgress = false;
                 }
             } catch (err) {
                 fnSaveInProgress = false;
