@@ -654,6 +654,20 @@ class GoogleBooksAPI:
                         
                         # Place (Google Books rarely provides this, so we rely heavily on the Map)
                         place = resolve_place(publisher, '')
+                        
+                        # ISBN - Google Books returns industryIdentifiers array
+                        # Prefer ISBN_13 over ISBN_10
+                        isbn = ''
+                        identifiers = info.get('industryIdentifiers', [])
+                        for ident in identifiers:
+                            if ident.get('type') == 'ISBN_13':
+                                isbn = ident.get('identifier', '')
+                                break
+                            elif ident.get('type') == 'ISBN_10' and not isbn:
+                                isbn = ident.get('identifier', '')
+                        
+                        # Edition (if available)
+                        edition = info.get('edition', '')
 
                         candidates.append({
                             'type': 'book',
@@ -662,6 +676,8 @@ class GoogleBooksAPI:
                             'publisher': publisher,
                             'place': place,
                             'year': year,
+                            'isbn': isbn,
+                            'edition': edition,
                             'source_engine': 'Google Books',
                             'raw_source': query
                         })
@@ -944,16 +960,32 @@ def extract_components(text):
     """
     Extract book metadata using multiple engines in fallback order.
     Returns first successful result.
+    
+    UPDATED 2025-12-22: 
+    - ISBN detection FIRST (most precise)
+    - Google Books API for ISBN lookup (free, comprehensive)
+    - Google Books fuzzy search as fallback
     """
     clean_text = text.strip()
     
-    # STRATEGY 1: ISBN DETECTION
+    # STRATEGY 1: ISBN DETECTION (most precise)
     # Look for ISBN-10 or ISBN-13 patterns
-    isbn_match = re.search(r'\b(?:97[89][-\s]?)?(\d[-\s]?){9}[\dX]\b', clean_text)
+    isbn_match = re.search(r'\b(97[89][-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d[-\s]?\d|\d{9}[\dXx])\b', clean_text.replace('-', '').replace(' ', ''))
     
     if isbn_match:
-        # If we have an ISBN, Open Library is the authority
-        results = OpenLibraryAPI.get_by_isbn(isbn_match.group(0))
+        isbn_clean = re.sub(r'[-\s]', '', isbn_match.group(0))
+        print(f"[books] ISBN detected: {isbn_clean}, trying Google Books...")
+        
+        # Try Google Books first for ISBN (free, comprehensive)
+        results = GoogleBooksAPI.search(f"isbn:{isbn_clean}")
+        if results:
+            # Ensure ISBN is in result
+            results[0]['isbn'] = isbn_clean
+            return results
+        
+        # Fallback to Open Library for ISBN
+        print(f"[books] Google Books failed for ISBN, trying Open Library...")
+        results = OpenLibraryAPI.get_by_isbn(isbn_clean)
         if results:
             return results
 
