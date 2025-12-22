@@ -481,8 +481,44 @@ def _resolve_publication_place(publisher: str, api_place: str = '') -> str:
     # 3. Fall back to books.py map
     return books.resolve_place(publisher, '') or ''
 
+
+def _famous_paper_to_components(famous: dict, raw_source: str) -> SourceComponents:
+    """
+    Convert famous_papers.py cache entry to SourceComponents.
+    
+    ADDED 2025-12-22: Ensures authors_parsed is populated for proper 
+    parenthetical formatting (Caplan 1998) rather than relying on string parsing.
+    """
+    authors = famous.get('authors', [])
+    authors_parsed = []
+    for author in authors:
+        if author:
+            parsed = parse_author_name(author)
+            authors_parsed.append(parsed)
+    
+    return SourceComponents(
+        citation_type=CitationType.JOURNAL,
+        raw_source=raw_source,
+        source_engine="Famous Papers Cache",
+        title=famous.get('title', ''),
+        authors=authors,
+        authors_parsed=authors_parsed,
+        year=famous.get('year', ''),
+        journal=famous.get('journal', ''),
+        doi=famous.get('doi', ''),
+        volume=famous.get('volume', ''),
+        issue=famous.get('issue', ''),
+        pages=famous.get('pages', ''),
+    )
+
+
 def _book_dict_to_components(data: dict, raw_source: str) -> Optional[SourceComponents]:
-    """Convert books.py result dict to SourceComponents."""
+    """
+    Convert books.py result dict to SourceComponents.
+    
+    FIXED 2025-12-22: Now populates authors_parsed for proper parenthetical formatting,
+    and includes edition field.
+    """
     if not data:
         return None
     
@@ -491,16 +527,27 @@ def _book_dict_to_components(data: dict, raw_source: str) -> Optional[SourceComp
     api_place = data.get('place', '')
     place = _resolve_publication_place(publisher, api_place)
     
+    # Get authors and parse them into structured format
+    authors = data.get('authors', [])
+    authors_parsed = []
+    for author in authors:
+        if author:
+            parsed = parse_author_name(author)
+            authors_parsed.append(parsed)
+    
     return SourceComponents(
         citation_type=CitationType.BOOK,
         raw_source=raw_source,
         source_engine=data.get('source_engine', 'Google Books/Open Library'),
         title=data.get('title', ''),
-        authors=data.get('authors', []),
+        authors=authors,
+        authors_parsed=authors_parsed,
         year=data.get('year', ''),
         publisher=publisher,
         place=place,
         isbn=data.get('isbn', ''),
+        edition=data.get('edition', ''),
+        url=data.get('url', ''),
         raw_data=data
     )
 
@@ -1371,15 +1418,19 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             print(f"[UnifiedRouter] ISBN detected in URL: {isbn_raw}")
             
             try:
-                from engines.books import search_books
-                book_results = search_books(f"isbn:{isbn_raw}")
+                # Import Google Books search (returns list of dicts)
+                from engines.books import GoogleBooksAPI
+                book_results = GoogleBooksAPI.search(f"isbn:{isbn_raw}")
                 if book_results:
-                    result = book_results[0]
-                    result.url = url
-                    result.isbn = isbn_raw
-                    print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
-                    _log_url_success(url, 'isbn_lookup', result, start_time)
-                    return result
+                    # Convert dict to SourceComponents using our converter
+                    book_dict = book_results[0]
+                    book_dict['isbn'] = isbn_raw  # Ensure ISBN is in dict before conversion
+                    book_dict['url'] = url
+                    result = _book_dict_to_components(book_dict, url)
+                    if result:
+                        print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
+                        _log_url_success(url, 'isbn_lookup', result, start_time)
+                        return result
             except Exception as e:
                 print(f"[UnifiedRouter] ISBN lookup failed: {e}")
     
@@ -1750,12 +1801,7 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
         # Check famous papers cache first
         famous = find_famous_paper(query)
         if famous:
-            metadata = SourceComponents(
-                citation_type=CitationType.JOURNAL,
-                raw_source=query,
-                source_engine="Famous Papers Cache",
-                **famous
-            )
+            metadata = _famous_paper_to_components(famous, query)
         else:
             components = _route_journal(query, gist=context)
     
@@ -1877,6 +1923,7 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
         # =======================================================================
         # ISBN DETECTION IN URLs (Added 2025-12-22)
         # If URL contains an ISBN, look up the book via Google Books
+        # FIXED 2025-12-22: Convert dict to SourceComponents before formatting
         # =======================================================================
         if not results:
             isbn_match = re.search(r'(?:isbn[=/:-]?)?(97[89]\d{10}|97[89][-\d]{13}|\d{9}[\dXx]|\d{10})', query, re.IGNORECASE)
@@ -1887,15 +1934,18 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
                 if is_valid_isbn:
                     print(f"[UnifiedRouter] ISBN detected in URL: {isbn_raw}")
                     try:
-                        from engines.books import search_books
-                        book_results = search_books(f"isbn:{isbn_raw}")
+                        from engines.books import GoogleBooksAPI
+                        book_results = GoogleBooksAPI.search(f"isbn:{isbn_raw}")
                         if book_results:
-                            result = book_results[0]
-                            result.url = query
-                            result.isbn = isbn_raw
-                            formatted = formatter.format(result)
-                            results.append((result, formatted, "Google Books (ISBN)"))
-                            print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
+                            # Convert dict to SourceComponents
+                            book_dict = book_results[0]
+                            book_dict['isbn'] = isbn_raw
+                            book_dict['url'] = query
+                            result = _book_dict_to_components(book_dict, query)
+                            if result:
+                                formatted = formatter.format(result)
+                                results.append((result, formatted, "Google Books (ISBN)"))
+                                print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
                     except Exception as e:
                         print(f"[UnifiedRouter] ISBN lookup failed: {e}")
         
@@ -1966,12 +2016,7 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
         # Check famous papers first
         famous = find_famous_paper(query)
         if famous:
-            meta = SourceComponents(
-                citation_type=CitationType.JOURNAL,
-                raw_source=query,
-                source_engine="Famous Papers Cache",
-                **famous
-            )
+            meta = _famous_paper_to_components(famous, query)
             formatted = formatter.format(meta)
             results.append((meta, formatted, "Famous Papers"))
         
