@@ -368,6 +368,74 @@ class SessionManager:
         
         if expired:
             print(f"[SessionManager] Cleaned up {len(expired)} expired sessions")
+    
+    def atomic_update_document(self, session_id: str, note_id: int, formatted: str) -> dict:
+        """
+        Atomically update a document note within the session lock.
+        
+        This prevents race conditions when multiple citations are accepted
+        in rapid succession (batch processing). Each update:
+        1. Acquires lock
+        2. Gets LATEST processed_doc
+        3. Updates the specific note
+        4. Saves back
+        5. Releases lock
+        
+        Returns:
+            {
+                'success': bool,
+                'updated': bool,  # True if doc actually changed
+                'error': str or None
+            }
+        """
+        from document_processor import update_document_note
+        
+        with self._lock:
+            try:
+                session = self._sessions.get(session_id)
+                
+                # Fallback: try loading from disk if not in memory
+                if not session and self._persistence_available:
+                    session_file = self._get_session_file(session_id)
+                    if session_file.exists():
+                        try:
+                            with open(session_file, 'rb') as f:
+                                session = pickle.load(f)
+                            self._sessions[session_id] = session
+                            print(f"[SessionManager] Recovered session {session_id[:8]} from disk for atomic_update")
+                        except Exception as e:
+                            return {'success': False, 'updated': False, 'error': f'Failed to recover session: {e}'}
+                
+                if not session:
+                    return {'success': False, 'updated': False, 'error': 'Session not found'}
+                
+                if datetime.now() > session['expires_at']:
+                    del self._sessions[session_id]
+                    self._delete_session_file(session_id)
+                    return {'success': False, 'updated': False, 'error': 'Session expired'}
+                
+                processed_doc = session['data'].get('processed_doc')
+                if not processed_doc:
+                    return {'success': False, 'updated': False, 'error': 'No processed document in session'}
+                
+                # Update the document
+                updated_doc = update_document_note(processed_doc, note_id, formatted)
+                
+                # Check if actually changed
+                doc_changed = (updated_doc != processed_doc)
+                
+                if doc_changed:
+                    session['data']['processed_doc'] = updated_doc
+                    self._save_session(session_id)
+                    print(f"[SessionManager] Atomic update: note {note_id} updated successfully")
+                else:
+                    print(f"[SessionManager] Atomic update: note {note_id} unchanged (may not exist in document)")
+                
+                return {'success': True, 'updated': doc_changed, 'error': None}
+                
+            except Exception as e:
+                print(f"[SessionManager] Atomic update error for note {note_id}: {e}")
+                return {'success': False, 'updated': False, 'error': str(e)}
 
 
 # Global session manager instance
@@ -1282,24 +1350,18 @@ def update_note():
                 'error': f'Note {note_id} not found'
             }), 404
         
-        # Update the document - this is the critical part
-        from document_processor import update_document_note
-        try:
-            updated_doc = update_document_note(processed_doc, note_id, new_html)
-            
-            # Verify the update actually changed something
-            if updated_doc == processed_doc:
-                print(f"[API] Warning: update_document_note returned unchanged document for note {note_id}")
-            
-            # Save updated document to session
-            sessions.set(session_id, 'processed_doc', updated_doc)
-            
-        except Exception as update_err:
-            print(f"[API] Document update failed for note {note_id}: {update_err}")
+        # Update the document using ATOMIC update to prevent race conditions
+        update_result = sessions.atomic_update_document(session_id, note_id, new_html)
+        
+        if not update_result['success']:
+            print(f"[API] Atomic document update failed for note {note_id}: {update_result['error']}")
             return jsonify({
                 'success': False,
-                'error': f'Failed to update document: {str(update_err)}'
+                'error': f'Failed to update document: {update_result["error"]}'
             }), 500
+        
+        if not update_result['updated']:
+            print(f"[API] Warning: Atomic update returned unchanged document for note {note_id}")
         
         # Update results array
         results[note_idx]['formatted'] = new_html
@@ -1950,32 +2012,29 @@ def accept_reference():
                     formatted = formatter.format(metadata)
                     reference_id = citation_id
                 
-                # Update the Word document for footnote mode
+                # Update the Word document for footnote mode using ATOMIC update
                 mode = session_data.get('mode', 'footnote')
-                if mode == 'footnote':
-                    processed_doc = session_data.get('processed_doc')
-                    if processed_doc and citation_id:
-                        from document_processor import update_document_note
-                        try:
-                            updated_doc = update_document_note(processed_doc, citation_id, formatted)
-                            if updated_doc != processed_doc:
-                                sessions.set(session_id, 'processed_doc', updated_doc)
-                                print(f"[API] Updated Word document for footnote {citation_id}")
-                            else:
-                                print(f"[API] Warning: Word doc unchanged for footnote {citation_id} - note may not exist in document")
-                            
-                            # Also update results array
-                            for r in results:
-                                rid = r.get('id')
-                                rnid = r.get('note_id')
-                                # Check both 'id' and 'note_id' for proper matching with type coercion
-                                if (rid is not None and int(rid) == cid) or (rnid is not None and int(rnid) == cid):
-                                    r['formatted'] = formatted
-                                    r['success'] = True
-                                    break
-                            sessions.set(session_id, 'results', results)
-                        except Exception as doc_err:
-                            print(f"[API] Warning: Failed to update Word doc for footnote {citation_id}: {doc_err}")
+                if mode == 'footnote' and citation_id:
+                    # Use atomic update to prevent race conditions in batch processing
+                    update_result = sessions.atomic_update_document(session_id, int(citation_id), formatted)
+                    
+                    if update_result['success']:
+                        if update_result['updated']:
+                            print(f"[API] Atomic: Updated Word document for footnote {citation_id}")
+                        else:
+                            print(f"[API] Atomic: Word doc unchanged for footnote {citation_id} - note may not exist")
+                        
+                        # Also update results array (still need separate set for this)
+                        for r in results:
+                            rid = r.get('id')
+                            rnid = r.get('note_id')
+                            if (rid is not None and int(rid) == cid) or (rnid is not None and int(rnid) == cid):
+                                r['formatted'] = formatted
+                                r['success'] = True
+                                break
+                        sessions.set(session_id, 'results', results)
+                    else:
+                        print(f"[API] Atomic update failed for footnote {citation_id}: {update_result['error']}")
                 
                 print(f"[API] Footnote mode: Accepted option for citation {citation_id}: {formatted[:60]}...")
             else:
@@ -2221,6 +2280,285 @@ def accept_reference():
         
     except Exception as e:
         print(f"[API] Error in /api/accept-reference: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/verify-entry', methods=['POST'])
+def verify_entry():
+    """
+    Process user-edited/replaced citation text and return formatted recommendations.
+    
+    This is Layer 2 of the verification flow. When a user edits the textarea
+    or enters their own citation text, this endpoint:
+    1. Runs the text through the citation extraction pipeline
+    2. Stores SourceComponents in session (HIDDEN from user)
+    3. Returns ONLY formatted citations for user to choose from
+    
+    Request JSON:
+    {
+        "session_id": "uuid",
+        "citation_id": 10,
+        "text": "Caplan, Trains brains 1995",
+        "style": "chicago"
+    }
+    
+    Response JSON:
+    {
+        "success": true,
+        "options": [
+            {"id": 0, "formatted": "Caplan, Eric M. \"Trains, brains...\""},
+            {"id": 1, "formatted": "Caplan, Eric M. \"Trains and Trauma...\""}
+        ],
+        "original": {"formatted": "Caplan, Trains brains 1995"}
+    }
+    
+    NOTE: SourceComponents are stored server-side but NEVER sent to client.
+    This protects the extraction logic from reverse engineering.
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing request data'
+            }), 400
+        
+        session_id = data.get('session_id')
+        citation_id = data.get('citation_id')
+        text = data.get('text', '').strip()
+        style = data.get('style', 'Chicago Manual of Style')
+        
+        if not session_id or not text:
+            return jsonify({
+                'success': False,
+                'error': 'Missing session_id or text'
+            }), 400
+        
+        # Verify session exists
+        session_data = sessions.get(session_id)
+        if not session_data:
+            return jsonify({
+                'success': False,
+                'error': 'Session not found or expired'
+            }), 404
+        
+        # Run text through citation extraction pipeline
+        from unified_router import get_multiple_citations
+        
+        print(f"[API] verify-entry: Processing user text: '{text[:50]}...'")
+        
+        # Get multiple citation candidates (returns list of (SourceComponents, formatted, source))
+        candidates = get_multiple_citations(text, style, limit=5)
+        
+        # Store SourceComponents in session, keyed by option ID
+        # This is the HIDDEN data that user never sees
+        verification_cache = {}
+        options = []
+        
+        for idx, (components, formatted, source) in enumerate(candidates):
+            # Store full components server-side
+            verification_cache[idx] = {
+                'components': components,
+                'formatted': formatted,
+                'source': source
+            }
+            
+            # Return ONLY formatted text to client
+            options.append({
+                'id': idx,
+                'formatted': formatted
+            })
+        
+        # Store verification cache in session for this citation
+        verify_key = f'verify_{citation_id}'
+        sessions.set(session_id, verify_key, verification_cache)
+        
+        # Also store the original user text
+        sessions.set(session_id, f'verify_original_{citation_id}', text)
+        
+        print(f"[API] verify-entry: Found {len(options)} options for citation {citation_id}")
+        
+        return jsonify({
+            'success': True,
+            'options': options,
+            'original': {
+                'formatted': text
+            }
+        })
+        
+    except Exception as e:
+        print(f"[API] Error in /api/verify-entry: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/confirm-verified', methods=['POST'])
+def confirm_verified():
+    """
+    User selected an option from Layer 2 verification.
+    
+    This saves both:
+    1. The formatted text (visible to user)
+    2. The SourceComponents (hidden, for admin/export)
+    
+    Request JSON:
+    {
+        "session_id": "uuid",
+        "citation_id": 10,
+        "selected_option": 0,  // or "original" to keep user's raw text
+        "style": "chicago"
+    }
+    
+    Response JSON:
+    {
+        "success": true,
+        "formatted": "Caplan, Eric M. \"Trains, brains...\""
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing request data'
+            }), 400
+        
+        session_id = data.get('session_id')
+        citation_id = data.get('citation_id')
+        selected_option = data.get('selected_option')  # int or "original"
+        style = data.get('style', 'Chicago Manual of Style')
+        
+        if not session_id or citation_id is None or selected_option is None:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required fields'
+            }), 400
+        
+        # Get session data
+        session_data = sessions.get(session_id)
+        if not session_data:
+            return jsonify({
+                'success': False,
+                'error': 'Session not found or expired'
+            }), 404
+        
+        # Get verification cache for this citation
+        verify_key = f'verify_{citation_id}'
+        verification_cache = session_data.get(verify_key, {})
+        original_text = session_data.get(f'verify_original_{citation_id}', '')
+        
+        # Get the original citation from results to find raw_source
+        results = session_data.get('results', [])
+        original_citation = None
+        cid = int(citation_id) if citation_id is not None else None
+        for r in results:
+            rid = r.get('id')
+            rnid = r.get('note_id')
+            if (rid is not None and int(rid) == cid) or (rnid is not None and int(rnid) == cid):
+                original_citation = r
+                break
+        
+        raw_source = ''
+        if original_citation:
+            raw_source = original_citation.get('original', '') or original_citation.get('text', '')
+        
+        if selected_option == 'original':
+            # User chose to keep their raw text as-is (no SourceComponents)
+            formatted = original_text
+            components = None
+            print(f"[API] confirm-verified: User kept original text for citation {citation_id}")
+        else:
+            # User selected one of the extracted options
+            option_data = verification_cache.get(int(selected_option))
+            if not option_data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Option {selected_option} not found in verification cache'
+                }), 404
+            
+            formatted = option_data['formatted']
+            components = option_data['components']
+            print(f"[API] confirm-verified: User selected option {selected_option} for citation {citation_id}")
+        
+        # Update the Word document atomically
+        mode = session_data.get('mode', 'footnote')
+        if mode == 'footnote' and citation_id:
+            update_result = sessions.atomic_update_document(session_id, int(citation_id), formatted)
+            
+            if update_result['success']:
+                if update_result['updated']:
+                    print(f"[API] confirm-verified: Atomic updated document for footnote {citation_id}")
+                else:
+                    print(f"[API] confirm-verified: Document unchanged for footnote {citation_id}")
+            else:
+                print(f"[API] confirm-verified: Atomic update failed: {update_result['error']}")
+        
+        # Update results array
+        for r in results:
+            rid = r.get('id')
+            rnid = r.get('note_id')
+            if (rid is not None and int(rid) == cid) or (rnid is not None and int(rnid) == cid):
+                r['formatted'] = formatted
+                r['success'] = True
+                break
+        sessions.set(session_id, 'results', results)
+        
+        # Update SourceComponents cache if we have components
+        if components:
+            metadata_cache = session_data.get('metadata_cache')
+            if metadata_cache and raw_source:
+                metadata_cache.set(raw_source, components)
+                sessions.set(session_id, 'metadata_cache', metadata_cache)
+                print(f"[API] confirm-verified: Updated components cache for '{raw_source[:30]}...'")
+        
+        # Store in accepted_references
+        accepted_refs = session_data.get('accepted_references', {})
+        accepted_data = {
+            'formatted': formatted,
+            'accepted_at': time.time(),
+            'source': 'User Verified' if components else 'User Original'
+        }
+        
+        # Store component data for CSV export (admin only)
+        if components:
+            accepted_data['title'] = components.title or ''
+            accepted_data['authors'] = components.authors or []
+            accepted_data['year'] = components.year or ''
+            accepted_data['journal'] = components.journal or ''
+            accepted_data['publisher'] = components.publisher or ''
+            accepted_data['volume'] = components.volume or ''
+            accepted_data['issue'] = components.issue or ''
+            accepted_data['pages'] = components.pages or ''
+            accepted_data['doi'] = components.doi or ''
+            accepted_data['url'] = components.url or ''
+        
+        accepted_refs[str(citation_id)] = accepted_data
+        sessions.set(session_id, 'accepted_references', accepted_refs)
+        
+        # Clean up verification cache for this citation
+        sessions.set(session_id, verify_key, None)
+        sessions.set(session_id, f'verify_original_{citation_id}', None)
+        
+        print(f"[API] confirm-verified: Completed for citation {citation_id}")
+        
+        return jsonify({
+            'success': True,
+            'formatted': formatted
+        })
+        
+    except Exception as e:
+        print(f"[API] Error in /api/confirm-verified: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
