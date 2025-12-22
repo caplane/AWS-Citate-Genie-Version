@@ -427,7 +427,10 @@ class SessionManager:
                 if doc_changed:
                     session['data']['processed_doc'] = updated_doc
                     self._save_session(session_id)
-                    print(f"[SessionManager] Atomic update: note {note_id} updated successfully")
+                    # DIAGNOSTIC: Log document hash after update
+                    import hashlib
+                    new_hash = hashlib.md5(updated_doc).hexdigest()[:12]
+                    print(f"[SessionManager] Atomic update: note {note_id} updated successfully (new_hash={new_hash}, size={len(updated_doc)})")
                 else:
                     print(f"[SessionManager] Atomic update: note {note_id} unchanged (may not exist in document)")
                 
@@ -1006,7 +1009,18 @@ def download(session_id: str):
         processed_doc = session_data.get('processed_doc')
         filename = session_data.get('filename', 'processed.docx')
         
+        # DIAGNOSTIC: Log document hash to verify we're getting updated version
+        if processed_doc:
+            import hashlib
+            doc_hash = hashlib.md5(processed_doc).hexdigest()[:12]
+            doc_size = len(processed_doc)
+            print(f"[API] Download: session={session_id[:8]}, doc_hash={doc_hash}, size={doc_size}")
+        
         if not processed_doc:
+            return jsonify({
+                'success': False,
+                'error': 'Processed document not found'
+            }), 404
             return jsonify({
                 'success': False,
                 'error': 'Processed document not found'
@@ -2262,6 +2276,61 @@ def accept_reference():
                     print(f"[API] SUCCESS: Updated metadata_cache for '{original_text[:30]}...' with title='{updated_meta.title[:30] if updated_meta.title else 'N/A'}'")
                 else:
                     print(f"[API] Warning: Could not update metadata_cache - original_text is empty. citation={citation is not None}")
+        
+        # =====================================================================
+        # SAVE ACCEPTED CITATION TO DATABASE FOR CSV EXPORT
+        # =====================================================================
+        try:
+            from billing.db import get_db
+            from billing.admin_models import AcceptedCitation
+            
+            # Get user_id if authenticated
+            user_id = current_user.id if current_user.is_authenticated else None
+            
+            # Get style from session or request
+            style = session_data.get('style', 'Chicago Manual of Style')
+            
+            # Build AcceptedCitation record
+            accepted = AcceptedCitation(
+                session_id=session_id,
+                user_id=user_id,
+                note_id=reference_id,
+                original_text=original_text if original_text else '',
+                formatted_citation=formatted,
+                citation_style=style,
+                citation_type=option.get('citation_type', '') if option else '',
+                title=option.get('title', '') if option else '',
+                authors=option.get('authors', []) if option else [],
+                year=option.get('year', '') if option else '',
+                journal=option.get('journal', '') if option else '',
+                volume=option.get('volume', '') if option else '',
+                issue=option.get('issue', '') if option else '',
+                pages=option.get('pages', '') if option else '',
+                doi=option.get('doi', '') if option else '',
+                pmid=option.get('pmid', '') if option else '',
+                publisher=option.get('publisher', '') if option else '',
+                place=option.get('place', '') if option else '',
+                edition=option.get('edition', '') if option else '',
+                isbn=option.get('isbn', '') if option else '',
+                case_name=option.get('case_name', '') if option else '',
+                legal_citation=option.get('citation', '') if option else '',
+                court=option.get('court', '') if option else '',
+                jurisdiction=option.get('jurisdiction', '') if option else '',
+                newspaper=option.get('newspaper', '') if option else '',
+                url=option.get('url', '') if option else '',
+                access_date=option.get('access_date', '') if option else '',
+                source_engine=option.get('source', '') if option else '',
+                confidence='high' if option and (option.get('doi') or option.get('citation')) else 'medium'
+            )
+            
+            db = get_db()
+            db.add(accepted)
+            db.commit()
+            print(f"[API] Saved AcceptedCitation {accepted.id} for session {session_id[:8]}")
+            
+        except Exception as db_err:
+            print(f"[API] Warning: Failed to save AcceptedCitation: {db_err}")
+            # Don't fail the request if DB save fails
         
         print(f"[API] Accepted reference {reference_id} for session {session_id[:8]}")
         
