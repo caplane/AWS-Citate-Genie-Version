@@ -433,47 +433,112 @@ def _update_content_types(content_types_path: str) -> None:
 
 def export_cache_to_csv(cache: SourceComponentsCache) -> str:
     """
-    Export cache to CSV format.
+    Export cache to CSV format with separate author first/last name columns.
     
     Args:
         cache: The SourceComponentsCache to export
         
     Returns:
-        CSV string
+        CSV string with columns for up to 10 authors (author1_last, author1_first, etc.)
     """
     import csv
     from io import StringIO
     
+    # Import parse_author_name for parsing author strings
+    try:
+        from models import parse_author_name
+    except ImportError:
+        # Fallback parser if models import fails
+        def parse_author_name(name):
+            if not name:
+                return {"family": "", "given": ""}
+            name = name.strip()
+            if "," in name:
+                parts = name.split(",", 1)
+                return {"family": parts[0].strip(), "given": parts[1].strip() if len(parts) > 1 else ""}
+            parts = name.split()
+            if len(parts) == 1:
+                return {"family": name, "given": ""}
+            return {"given": parts[0], "family": " ".join(parts[1:])}
+    
     output = StringIO()
     
-    # Define columns for export
+    # Define columns for export - include up to 10 authors with separate first/last
+    MAX_AUTHORS = 10
     columns = [
         'original_text',
         'title',
-        'authors',
         'year',
         'doi',
         'url',
-        'type',
+        'citation_type',
+        'source_engine',
         'journal',
-        'publisher',
         'volume',
         'issue',
         'pages',
+        'publisher',
+        'place',
+        'newspaper',
         'case_name',
-        'citation',
+        'legal_citation',
         'court',
         'cached_at',
     ]
+    
+    # Add author columns (author1_last, author1_first, author2_last, author2_first, etc.)
+    for i in range(1, MAX_AUTHORS + 1):
+        columns.append(f'author{i}_last')
+        columns.append(f'author{i}_first')
     
     writer = csv.DictWriter(output, fieldnames=columns, extrasaction='ignore')
     writer.writeheader()
     
     for item in cache.get_all_components():
-        # Flatten authors list to string, filtering out None values
-        if 'authors' in item and isinstance(item['authors'], list):
-            item['authors'] = '; '.join(str(a) for a in item['authors'] if a is not None)
+        row = {
+            'original_text': item.get('original_text', ''),
+            'title': item.get('title', ''),
+            'year': item.get('year', ''),
+            'doi': item.get('doi', ''),
+            'url': item.get('url', ''),
+            'citation_type': item.get('type', ''),
+            'source_engine': item.get('source_engine', ''),
+            'journal': item.get('journal', ''),
+            'volume': item.get('volume', ''),
+            'issue': item.get('issue', ''),
+            'pages': item.get('pages', ''),
+            'publisher': item.get('publisher', ''),
+            'place': item.get('place', ''),
+            'newspaper': item.get('newspaper', ''),
+            'case_name': item.get('case_name', ''),
+            'legal_citation': item.get('citation', ''),
+            'court': item.get('court', ''),
+            'cached_at': item.get('cached_at', ''),
+        }
         
-        writer.writerow(item)
+        # Parse authors into separate columns
+        authors = item.get('authors', [])
+        authors_parsed = item.get('authors_parsed', [])
+        
+        for i in range(MAX_AUTHORS):
+            col_last = f'author{i+1}_last'
+            col_first = f'author{i+1}_first'
+            
+            if i < len(authors_parsed) and authors_parsed[i]:
+                # Use pre-parsed author data
+                parsed = authors_parsed[i]
+                row[col_last] = parsed.get('family', '')
+                row[col_first] = parsed.get('given', '')
+            elif i < len(authors) and authors[i]:
+                # Parse from raw author string
+                parsed = parse_author_name(authors[i])
+                row[col_last] = parsed.get('family', '')
+                row[col_first] = parsed.get('given', '')
+            else:
+                # No author at this position
+                row[col_last] = ''
+                row[col_first] = ''
+        
+        writer.writerow(row)
     
     return output.getvalue()
