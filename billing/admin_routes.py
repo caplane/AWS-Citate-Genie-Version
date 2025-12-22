@@ -81,11 +81,16 @@ def get_date_range(period: str = '30d') -> tuple:
     Parse period string and return (start_date, end_date).
     
     Supported formats:
+        - 'all' - all time (from 2020 to now)
         - '7d', '30d', '90d' - last N days
         - '2025-01' - specific month
         - '2025-01-15:2025-01-20' - date range
     """
     now = datetime.utcnow()
+    
+    # All time - from 2020 to now
+    if period == 'all':
+        return (datetime(2020, 1, 1), now)
     
     if period.endswith('d'):
         days = int(period[:-1])
@@ -171,6 +176,11 @@ DASHBOARD_HTML = """
             color: #e2e8f0;
         }
         .btn-secondary:hover { background: #475569; }
+        .btn-danger {
+            background: #dc2626;
+            color: white;
+        }
+        .btn-danger:hover { background: #b91c1c; }
         
         .period-selector {
             display: flex;
@@ -308,6 +318,7 @@ DASHBOARD_HTML = """
     <div class="header">
         <h1>🔬 CitateGenie Admin Dashboard</h1>
         <div class="header-actions">
+            <button class="btn btn-danger" onclick="clearLogs()">🗑️ Clear Logs</button>
             <button class="btn btn-secondary" onclick="exportCSV()">📊 Export CSV</button>
             <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh</button>
         </div>
@@ -623,6 +634,52 @@ DASHBOARD_HTML = """
         
         function exportCSV() {
             window.location.href = `/admin/api/export/csv?key=${adminKey}&period=${currentPeriod}`;
+        }
+        
+        async function clearLogs() {
+            // Step 1: Offer to save logs first
+            const wantToSave = confirm('🗑️ Clear All Logs\\n\\nWould you like to EXPORT logs before clearing?\\n\\nClick OK to download CSV first, or Cancel to skip export.');
+            
+            if (wantToSave) {
+                // Trigger CSV download
+                window.location.href = `/admin/api/export/csv?key=${adminKey}&period=all`;
+                
+                // Wait a moment for download to start, then ask to proceed
+                await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+            
+            // Step 2: Confirm clearing (now that they've had chance to save)
+            const confirmMessage = wantToSave 
+                ? '✅ Logs exported.\\n\\nNow that you have saved your logs, do you want to CLEAR all logs from the database?\\n\\nThis action CANNOT be undone.'
+                : '⚠️ You chose not to export logs.\\n\\nAre you sure you want to CLEAR all logs from the database?\\n\\nThis action CANNOT be undone.';
+            
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+            
+            // Step 3: Final confirmation
+            if (!confirm('🚨 FINAL CONFIRMATION\\n\\nClick OK to permanently delete:\\n• All API call logs\\n• All document sessions\\n• All daily stats\\n\\nProceed?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/admin/api/clear-logs?key=${adminKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirm: true })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ Logs cleared successfully!\\n\\nDeleted:\\n• ${data.deleted.api_calls || 0} API calls\\n• ${data.deleted.document_sessions || 0} document sessions\\n• ${data.deleted.daily_stats || 0} daily stats`);
+                    refreshData();  // Reload dashboard
+                } else {
+                    alert('❌ Failed to clear logs: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('❌ Error: ' + err.message);
+            }
         }
         
         // Initial load
