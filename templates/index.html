@@ -908,6 +908,12 @@
             border-color: #3b82f6;
             background: #f8faff;
         }
+        
+        .alternative-card.selected {
+            border-color: #3b82f6;
+            background: #eff6ff;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
 
         .alternative-header {
             display: flex;
@@ -2631,12 +2637,20 @@
                 if (data.success && data.results?.length > 0) {
                     window.adFreshAlternatives = data.results;
                     
+                    // AUTO-SELECT FIRST RESULT: Populate textarea with top recommendation
+                    const topResult = data.results[0];
+                    document.getElementById('ad-final-textarea').value = topResult.citation;
+                    window.adSelectedAlternativeIdx = 0;  // Pre-select first option
+                    
+                    // Render alternatives with first one highlighted
                     container.innerHTML = data.results.map((r, i) => `
-                        <div class="alternative-card" onclick="adSelectFreshAlternative(${i})">
+                        <div class="alternative-card ${i === 0 ? 'selected' : ''}" onclick="adSelectFreshAlternative(${i})" id="ad-alt-${i}">
                             <p style="font-size: 0.9rem; color: #374151;">${escapeHtml(r.citation)}</p>
                         </div>
                     `).join('');
                 } else {
+                    window.adFreshAlternatives = null;
+                    window.adSelectedAlternativeIdx = null;
                     container.innerHTML = `
                         <div class="alternative-card" style="text-align: center; color: #9ca3af;">
                             <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
@@ -2645,6 +2659,8 @@
                     `;
                 }
             } catch (err) {
+                window.adFreshAlternatives = null;
+                window.adSelectedAlternativeIdx = null;
                 container.innerHTML = `
                     <div class="alternative-card" style="text-align: center; color: #ef4444;">
                         <i class="fas fa-exclamation-circle" style="font-size: 1.5rem; margin-bottom: 8px;"></i>
@@ -2659,6 +2675,11 @@
                 document.getElementById('ad-final-textarea').value = window.adFreshAlternatives[idx].citation;
                 // Track that user selected an alternative (has metadata)
                 window.adSelectedAlternativeIdx = idx;
+                
+                // Update visual selection state
+                document.querySelectorAll('#ad-alternatives-list .alternative-card').forEach((card, i) => {
+                    card.classList.toggle('selected', i === idx);
+                });
             }
         }
         
@@ -2880,12 +2901,21 @@
                 if (data.success && data.results?.length > 0) {
                     window.fnAlternatives = data.results;
                     
+                    // AUTO-SELECT FIRST RESULT: Populate textarea with top recommendation
+                    // This ensures Accept & Save uses the best match with full metadata
+                    const topResult = data.results[0];
+                    document.getElementById('fn-final-textarea').value = topResult.citation;
+                    fnSelectedOptionIndex = 0;  // Pre-select first option so CASE 1 triggers
+                    
+                    // Render alternatives with first one highlighted as selected
                     container.innerHTML = data.results.map((r, i) => `
-                        <div class="alternative-card" onclick="fnSelectAlternative(${i})">
+                        <div class="alternative-card ${i === 0 ? 'selected' : ''}" onclick="fnSelectAlternative(${i})" id="fn-alt-${i}">
                             <p style="font-size: 0.9rem; color: #374151;">${escapeHtml(r.citation)}</p>
                         </div>
                     `).join('');
                 } else {
+                    window.fnAlternatives = null;
+                    fnSelectedOptionIndex = null;
                     container.innerHTML = `
                         <div class="alternative-card" style="text-align: center; color: #9ca3af;">
                             <i class="fas fa-search" style="font-size: 1.5rem; margin-bottom: 8px; opacity: 0.3;"></i>
@@ -2894,6 +2924,8 @@
                     `;
                 }
             } catch (err) {
+                window.fnAlternatives = null;
+                fnSelectedOptionIndex = null;
                 container.innerHTML = `
                     <div class="alternative-card" style="text-align: center; color: #ef4444;">
                         <i class="fas fa-exclamation-circle" style="font-size: 1.5rem; margin-bottom: 8px;"></i>
@@ -2907,6 +2939,11 @@
             if (window.fnAlternatives?.[idx]) {
                 document.getElementById('fn-final-textarea').value = window.fnAlternatives[idx].citation;
                 fnSelectedOptionIndex = idx;  // Track selection for metadata preservation
+                
+                // Update visual selection state
+                document.querySelectorAll('#fn-alternatives-list .alternative-card').forEach((card, i) => {
+                    card.classList.toggle('selected', i === idx);
+                });
             }
         }
         
