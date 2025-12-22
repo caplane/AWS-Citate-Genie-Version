@@ -1351,6 +1351,39 @@ def _route_url(url: str) -> Optional[SourceComponents]:
             pass
     
     # ==========================================================================
+    # ISBN DETECTION IN URLs (Added 2025-12-22)
+    # 
+    # If URL contains an ISBN (10 or 13 digit), extract and look up the book.
+    # Works for ANY publisher - no domain list needed.
+    # Example: simonandschuster.com/books/Inside-of-a-Dog/Alexandra-Horowitz/9781668087374
+    # ==========================================================================
+    
+    # Match ISBN-13 (starts with 978 or 979) or ISBN-10 (10 digits)
+    # Can appear with or without hyphens, with or without "isbn" prefix
+    isbn_match = re.search(r'(?:isbn[=/:-]?)?(97[89]\d{10}|97[89][-\d]{13}|\d{9}[\dXx]|\d{10})', url, re.IGNORECASE)
+    
+    if isbn_match:
+        isbn_raw = isbn_match.group(1).replace('-', '').upper()
+        # Validate: ISBN-13 starts with 978/979, ISBN-10 is 10 chars
+        is_valid_isbn = (len(isbn_raw) == 13 and isbn_raw.startswith(('978', '979'))) or len(isbn_raw) == 10
+        
+        if is_valid_isbn:
+            print(f"[UnifiedRouter] ISBN detected in URL: {isbn_raw}")
+            
+            try:
+                from engines.books import search_books
+                book_results = search_books(f"isbn:{isbn_raw}")
+                if book_results:
+                    result = book_results[0]
+                    result.url = url
+                    result.isbn = isbn_raw
+                    print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
+                    _log_url_success(url, 'isbn_lookup', result, start_time)
+                    return result
+            except Exception as e:
+                print(f"[UnifiedRouter] ISBN lookup failed: {e}")
+    
+    # ==========================================================================
     # MAJOR PUBLISHER PII EXTRACTION (Added 2025-12-15)
     # 
     # Publishers like Lancet, Elsevier, etc. often block scrapers (403).
@@ -1842,6 +1875,31 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
                     pass
         
         # =======================================================================
+        # ISBN DETECTION IN URLs (Added 2025-12-22)
+        # If URL contains an ISBN, look up the book via Google Books
+        # =======================================================================
+        if not results:
+            isbn_match = re.search(r'(?:isbn[=/:-]?)?(97[89]\d{10}|97[89][-\d]{13}|\d{9}[\dXx]|\d{10})', query, re.IGNORECASE)
+            if isbn_match:
+                isbn_raw = isbn_match.group(1).replace('-', '').upper()
+                is_valid_isbn = (len(isbn_raw) == 13 and isbn_raw.startswith(('978', '979'))) or len(isbn_raw) == 10
+                
+                if is_valid_isbn:
+                    print(f"[UnifiedRouter] ISBN detected in URL: {isbn_raw}")
+                    try:
+                        from engines.books import search_books
+                        book_results = search_books(f"isbn:{isbn_raw}")
+                        if book_results:
+                            result = book_results[0]
+                            result.url = query
+                            result.isbn = isbn_raw
+                            formatted = formatter.format(result)
+                            results.append((result, formatted, "Google Books (ISBN)"))
+                            print(f"[UnifiedRouter] ✓ Found book via ISBN: {result.title[:50] if result.title else 'Unknown'}...")
+                    except Exception as e:
+                        print(f"[UnifiedRouter] ISBN lookup failed: {e}")
+        
+        # =======================================================================
         # ChatGPT-first for academic AI URLs (law reviews, think tanks, etc.)
         # =======================================================================
         if _is_academic_ai_url(query) and ACADEMIC_AI_AVAILABLE:
@@ -1900,7 +1958,7 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
         components = _route_legal(query)
         if components:
             formatted = formatter.format(components)
-            results.append((metadata, formatted, "Legal Cache"))
+            results.append((components, formatted, "Legal Cache"))
         return results  # Legal citations typically have one authoritative result
     
     # For journals/academic
