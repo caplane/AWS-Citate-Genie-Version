@@ -1917,12 +1917,48 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
             formatted = formatter.format(meta)
             results.append((meta, formatted, "Famous Papers"))
         
-        # FOR UNKNOWN QUERIES: Search books FIRST
-        # Queries like "caplan mind games" or "master slave husband" are more likely
-        # to be book searches than journal article searches.
+        # =====================================================================
+        # FOR UNKNOWN QUERIES: Use Triple AI Consensus as PRIMARY
+        # This calls Claude + OpenAI + Gemini in parallel and builds consensus
+        # on SOURCE COMPONENTS (not formatted citations) to prevent hallucinations.
+        # 
+        # TESTING MODE: This is primary to assess accuracy and cost.
+        # Can be switched to fallback after assessment.
+        # =====================================================================
         if detection.citation_type == CitationType.UNKNOWN:
             try:
-                print(f"[UnifiedRouter] UNKNOWN query - searching books FIRST: {query[:50]}...")
+                from engines.triple_ai_consensus import triple_ai_lookup_sync, ConsensusStatus
+                
+                print(f"[UnifiedRouter] UNKNOWN query - using TRIPLE AI CONSENSUS: {query[:50]}...")
+                
+                ai_result = triple_ai_lookup_sync(query, context)
+                
+                if ai_result.components and ai_result.confidence >= 0.5:
+                    meta = ai_result.components
+                    formatted = formatter.format(meta)
+                    source_name = f"TripleAI ({ai_result.status.value}, {ai_result.confidence:.0%})"
+                    
+                    # Add cost info to source for admin tracking
+                    if ai_result.total_cost_usd > 0:
+                        source_name += f" ${ai_result.total_cost_usd:.4f}"
+                    
+                    results.append((meta, formatted, source_name))
+                    print(f"[UnifiedRouter] ✓ TripleAI result: {meta.title[:50]}... ({meta.citation_type.name})")
+                    
+                    # If confidence is high, this might be all we need
+                    if ai_result.confidence >= 0.8 and len(results) >= 1:
+                        print(f"[UnifiedRouter] High confidence ({ai_result.confidence:.0%}) - skipping database fallback")
+                else:
+                    print(f"[UnifiedRouter] TripleAI: Low confidence ({ai_result.confidence:.0%}) or no result")
+                    
+            except ImportError:
+                print(f"[UnifiedRouter] triple_ai_consensus module not available - falling back to databases")
+            except Exception as e:
+                print(f"[UnifiedRouter] TripleAI error: {e}")
+            
+            # ALSO search books (for comparison/verification)
+            try:
+                print(f"[UnifiedRouter] Also searching books for comparison: {query[:50]}...")
                 book_results = books.search_all_engines(query)
                 print(f"[UnifiedRouter] Book engines returned {len(book_results)} results")
                 for data in book_results:
@@ -1930,10 +1966,17 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
                         break
                     meta = _book_dict_to_components(data, query)
                     if meta and meta.has_minimum_data():
-                        formatted = formatter.format(meta)
-                        source = data.get('source_engine', 'Google Books')
-                        results.append((meta, formatted, source))
-                        print(f"[UnifiedRouter] ✓ Added book: {meta.title[:50]}...")
+                        # Check for duplicates
+                        is_duplicate = any(
+                            meta.title and r[0].title and 
+                            meta.title.lower()[:30] == r[0].title.lower()[:30]
+                            for r in results
+                        )
+                        if not is_duplicate:
+                            formatted = formatter.format(meta)
+                            source = data.get('source_engine', 'Google Books')
+                            results.append((meta, formatted, source))
+                            print(f"[UnifiedRouter] ✓ Added book: {meta.title[:50]}...")
             except Exception as e:
                 print(f"[UnifiedRouter] Book engines error: {e}")
         
