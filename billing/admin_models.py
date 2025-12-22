@@ -278,3 +278,85 @@ class DailyStats(Base):
     
     def __repr__(self):
         return f'<DailyStats {self.date.strftime("%Y-%m-%d")}>'
+
+
+# =============================================================================
+# ACCEPTED CITATION MODEL
+# =============================================================================
+
+class AcceptedCitation(Base):
+    """
+    Stores SourceComponents for each accepted citation.
+    
+    This enables:
+    - CSV export of all processed citations with full metadata
+    - Building user citation libraries
+    - Analytics on citation types and sources
+    
+    Populated when user clicks Accept & Save in the workbench.
+    """
+    __tablename__ = 'accepted_citations'
+    
+    id = Column(Integer, primary_key=True)
+    
+    # Session info
+    session_id = Column(String(100), index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    
+    # Citation identification
+    note_id = Column(Integer)  # Footnote/endnote number in document
+    original_text = Column(Text)  # What user typed/pasted
+    
+    # Formatted output
+    formatted_citation = Column(Text)  # Final formatted citation
+    citation_style = Column(String(50))  # chicago, apa, mla, etc.
+    
+    # SourceComponents fields
+    citation_type = Column(String(50))  # journal, book, legal, etc.
+    title = Column(Text)
+    authors = Column(JSONB)  # List of author names
+    year = Column(String(20))
+    
+    # Academic
+    journal = Column(String(500))
+    volume = Column(String(50))
+    issue = Column(String(50))
+    pages = Column(String(100))
+    doi = Column(String(200))
+    pmid = Column(String(50))
+    
+    # Book
+    publisher = Column(String(500))
+    place = Column(String(200))
+    edition = Column(String(100))
+    isbn = Column(String(50))
+    
+    # Legal
+    case_name = Column(Text)
+    legal_citation = Column(String(500))
+    court = Column(String(200))
+    jurisdiction = Column(String(100))
+    
+    # Newspaper
+    newspaper = Column(String(500))
+    
+    # URL/Web
+    url = Column(Text)
+    access_date = Column(String(50))
+    
+    # Source tracking
+    source_engine = Column(String(100))  # crossref, pubmed, google_books, etc.
+    confidence = Column(String(20))  # high, medium, low
+    
+    # Timestamps
+    accepted_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    def __repr__(self):
+        return f'<AcceptedCitation {self.id} {self.citation_type}>'
+
+
+# Indexes for accepted citations
+Index('idx_accepted_session', AcceptedCitation.session_id)
+Index('idx_accepted_user', AcceptedCitation.user_id)
+Index('idx_accepted_type', AcceptedCitation.citation_type)
+Index('idx_accepted_at', AcceptedCitation.accepted_at)

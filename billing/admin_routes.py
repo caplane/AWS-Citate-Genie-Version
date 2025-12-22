@@ -181,6 +181,11 @@ DASHBOARD_HTML = """
             color: white;
         }
         .btn-danger:hover { background: #b91c1c; }
+        .btn-success {
+            background: #16a34a;
+            color: white;
+        }
+        .btn-success:hover { background: #15803d; }
         
         .period-selector {
             display: flex;
@@ -319,7 +324,8 @@ DASHBOARD_HTML = """
         <h1>🔬 CitateGenie Admin Dashboard</h1>
         <div class="header-actions">
             <button class="btn btn-danger" onclick="clearLogs()">🗑️ Clear Logs</button>
-            <button class="btn btn-secondary" onclick="exportCSV()">📊 Export CSV</button>
+            <button class="btn btn-success" onclick="exportCitations()">📋 Export Citations</button>
+            <button class="btn btn-secondary" onclick="exportCSV()">📊 Export API Calls</button>
             <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh</button>
         </div>
     </div>
@@ -634,6 +640,10 @@ DASHBOARD_HTML = """
         
         function exportCSV() {
             window.location.href = `/admin/api/export/csv?key=${adminKey}&period=${currentPeriod}`;
+        }
+        
+        function exportCitations() {
+            window.location.href = `/admin/api/export/citations-csv?key=${adminKey}&period=${currentPeriod}`;
         }
         
         async function clearLogs() {
@@ -1216,4 +1226,124 @@ def api_clear_logs():
             'success': False,
             'error': str(e)
         }), 500
+
+
+# =============================================================================
+# EXPORT ACCEPTED CITATIONS CSV
+# =============================================================================
+
+@admin_bp.route('/api/export/citations-csv')
+@requires_admin_key
+def api_export_citations_csv():
+    """
+    Export all accepted citations as CSV with full SourceComponents.
+    
+    GET /admin/api/export/citations-csv?key=ADMIN_SECRET&period=30d
+    
+    Query params:
+        period: Time period (7d, 30d, 90d, all)
+    
+    Returns CSV file with columns for all SourceComponents fields.
+    """
+    from billing.admin_models import AcceptedCitation
+    from zoneinfo import ZoneInfo
+    
+    period = request.args.get('period', '30d')
+    start_date, end_date = get_date_range(period)
+    
+    est = ZoneInfo('America/New_York')
+    
+    db = get_db()
+    
+    citations = db.query(AcceptedCitation).filter(
+        AcceptedCitation.accepted_at >= start_date,
+        AcceptedCitation.accepted_at < end_date
+    ).order_by(AcceptedCitation.accepted_at.desc()).all()
+    
+    # Build CSV
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Header - comprehensive SourceComponents columns
+    writer.writerow([
+        'accepted_at_est', 'session_id', 'note_id', 'original_text', 'formatted_citation',
+        'citation_style', 'citation_type', 'source_engine', 'confidence',
+        'title', 'year', 'doi', 'url',
+        'author1_last', 'author1_first', 'author2_last', 'author2_first', 
+        'author3_last', 'author3_first', 'author4_last', 'author4_first',
+        'journal', 'volume', 'issue', 'pages', 'pmid',
+        'publisher', 'place', 'edition', 'isbn',
+        'case_name', 'legal_citation', 'court', 'jurisdiction',
+        'newspaper', 'access_date'
+    ])
+    
+    # Data
+    for c in citations:
+        # Convert timestamp
+        if c.accepted_at:
+            ts_est = c.accepted_at.astimezone(est)
+            ts_str = ts_est.strftime('%Y-%m-%d %H:%M:%S EST')
+        else:
+            ts_str = ''
+        
+        # Parse authors (stored as JSON array)
+        authors = c.authors or []
+        author_cols = [''] * 8  # 4 authors x 2 (last, first)
+        for i, author in enumerate(authors[:4]):
+            if isinstance(author, dict):
+                author_cols[i*2] = author.get('family', author.get('last', ''))
+                author_cols[i*2 + 1] = author.get('given', author.get('first', ''))
+            elif isinstance(author, str):
+                # Try to parse "Last, First" or "First Last"
+                if ',' in author:
+                    parts = author.split(',', 1)
+                    author_cols[i*2] = parts[0].strip()
+                    author_cols[i*2 + 1] = parts[1].strip() if len(parts) > 1 else ''
+                else:
+                    parts = author.rsplit(' ', 1)
+                    if len(parts) == 2:
+                        author_cols[i*2] = parts[1]  # Last
+                        author_cols[i*2 + 1] = parts[0]  # First
+                    else:
+                        author_cols[i*2] = author
+        
+        writer.writerow([
+            ts_str,
+            c.session_id[:12] if c.session_id else '',
+            c.note_id,
+            (c.original_text or '')[:200],
+            (c.formatted_citation or '')[:500],
+            c.citation_style,
+            c.citation_type,
+            c.source_engine,
+            c.confidence,
+            c.title,
+            c.year,
+            c.doi,
+            c.url,
+            *author_cols,
+            c.journal,
+            c.volume,
+            c.issue,
+            c.pages,
+            c.pmid,
+            c.publisher,
+            c.place,
+            c.edition,
+            c.isbn,
+            c.case_name,
+            c.legal_citation,
+            c.court,
+            c.jurisdiction,
+            c.newspaper,
+            c.access_date
+        ])
+    
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename=citategenie_citations_{period}.csv'
+        }
+    )
 
