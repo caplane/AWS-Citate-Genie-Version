@@ -758,6 +758,112 @@ def api_costs():
     })
 
 
+@admin_bp.route('/api/url-stats')
+@requires_admin_key
+def api_url_stats():
+    """
+    Get URL fetch statistics.
+    
+    Returns detailed breakdown of URL resolution success/failure rates
+    by domain and resolution method.
+    """
+    from billing.admin_models import APICall
+    import json
+    
+    period = request.args.get('period', '30d')
+    start_date, end_date = get_date_range(period)
+    
+    db = get_db()
+    
+    # Get all URL fetch records
+    url_calls = db.query(APICall).filter(
+        APICall.timestamp >= start_date,
+        APICall.timestamp < end_date,
+        APICall.provider == 'url_fetch'
+    ).all()
+    
+    if not url_calls:
+        return jsonify({
+            'total_urls': 0,
+            'success_rate': 0,
+            'by_method': {},
+            'by_domain': {},
+            'failures': {},
+            'ai_fallback_rate': 0,
+            'period': period
+        })
+    
+    total = len(url_calls)
+    successful = sum(1 for c in url_calls if c.success)
+    ai_fallbacks = 0
+    by_method = {}
+    by_domain = {}
+    failures = {}
+    
+    for call in url_calls:
+        # Count by method (stored in endpoint field)
+        method = call.endpoint or 'unknown'
+        if method not in by_method:
+            by_method[method] = {'total': 0, 'success': 0}
+        by_method[method]['total'] += 1
+        if call.success:
+            by_method[method]['success'] += 1
+        
+        # Parse metadata
+        meta = call.metadata_json or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except:
+                meta = {}
+        
+        # Count by domain
+        domain = meta.get('domain', 'unknown')
+        if domain not in by_domain:
+            by_domain[domain] = {'total': 0, 'success': 0, 'failures': {}}
+        by_domain[domain]['total'] += 1
+        if call.success:
+            by_domain[domain]['success'] += 1
+        else:
+            reason = meta.get('failure_reason') or call.error_message or 'unknown'
+            by_domain[domain]['failures'][reason] = by_domain[domain]['failures'].get(reason, 0) + 1
+        
+        # Count AI fallbacks
+        if meta.get('used_ai_fallback'):
+            ai_fallbacks += 1
+        
+        # Count overall failure reasons
+        if not call.success:
+            reason = meta.get('failure_reason') or call.error_message or 'unknown'
+            failures[reason] = failures.get(reason, 0) + 1
+    
+    # Calculate success rates for methods
+    for method in by_method:
+        m = by_method[method]
+        m['success_rate'] = round(m['success'] / m['total'] * 100, 1) if m['total'] > 0 else 0
+    
+    # Calculate success rates for domains and sort by total
+    for domain in by_domain:
+        d = by_domain[domain]
+        d['success_rate'] = round(d['success'] / d['total'] * 100, 1) if d['total'] > 0 else 0
+    
+    # Sort domains by total (descending)
+    sorted_domains = dict(sorted(by_domain.items(), key=lambda x: -x[1]['total']))
+    
+    return jsonify({
+        'total_urls': total,
+        'successful': successful,
+        'failed': total - successful,
+        'success_rate': round(successful / total * 100, 1) if total > 0 else 0,
+        'ai_fallback_count': ai_fallbacks,
+        'ai_fallback_rate': round(ai_fallbacks / total * 100, 1) if total > 0 else 0,
+        'by_method': by_method,
+        'by_domain': sorted_domains,
+        'failures': failures,
+        'period': period
+    })
+
+
 @admin_bp.route('/api/documents')
 @requires_admin_key
 def api_documents():
@@ -924,9 +1030,13 @@ def api_trends():
 def api_export_csv():
     """Export API calls as CSV."""
     from billing.admin_models import APICall
+    from zoneinfo import ZoneInfo
     
     period = request.args.get('period', '30d')
     start_date, end_date = get_date_range(period)
+    
+    # EST timezone for readable timestamps
+    est = ZoneInfo('America/New_York')
     
     db = get_db()
     
@@ -941,15 +1051,22 @@ def api_export_csv():
     
     # Header
     writer.writerow([
-        'timestamp', 'provider', 'endpoint', 'input_tokens', 'output_tokens',
+        'timestamp_est', 'provider', 'endpoint', 'input_tokens', 'output_tokens',
         'cost_usd', 'source_type', 'citation_type', 'success', 'confidence',
         'latency_ms', 'query'
     ])
     
     # Data
     for c in calls:
+        # Convert UTC timestamp to EST
+        if c.timestamp:
+            ts_est = c.timestamp.astimezone(est)
+            ts_str = ts_est.strftime('%Y-%m-%d %H:%M:%S EST')
+        else:
+            ts_str = ''
+        
         writer.writerow([
-            c.timestamp.isoformat() if c.timestamp else '',
+            ts_str,
             c.provider,
             c.endpoint,
             c.input_tokens,
@@ -971,3 +1088,75 @@ def api_export_csv():
             'Content-Disposition': f'attachment; filename=citategenie_api_calls_{period}.csv'
         }
     )
+
+
+# =============================================================================
+# CLEAR LOGS ENDPOINT
+# =============================================================================
+
+@admin_bp.route('/api/clear-logs', methods=['POST'])
+@requires_admin_key
+def api_clear_logs():
+    """
+    Clear all logs from the database for a fresh start.
+    
+    POST /admin/api/clear-logs?key=ADMIN_SECRET
+    
+    Optional JSON body:
+    {
+        "confirm": true,           # Required confirmation
+        "tables": ["api_calls", "document_sessions", "daily_stats"]  # Optional: specific tables
+    }
+    
+    Returns counts of deleted records.
+    """
+    from billing.admin_models import APICall, DocumentSession, DailyStats
+    
+    data = request.get_json() or {}
+    
+    # Require explicit confirmation
+    if not data.get('confirm'):
+        return jsonify({
+            'success': False,
+            'error': 'Must include {"confirm": true} in request body'
+        }), 400
+    
+    # Which tables to clear (default: all)
+    tables_to_clear = data.get('tables', ['api_calls', 'document_sessions', 'daily_stats'])
+    
+    db = get_db()
+    deleted_counts = {}
+    
+    try:
+        # Clear in correct order (children before parents due to foreign keys)
+        
+        if 'api_calls' in tables_to_clear:
+            count = db.query(APICall).delete()
+            deleted_counts['api_calls'] = count
+        
+        if 'document_sessions' in tables_to_clear:
+            count = db.query(DocumentSession).delete()
+            deleted_counts['document_sessions'] = count
+        
+        if 'daily_stats' in tables_to_clear:
+            count = db.query(DailyStats).delete()
+            deleted_counts['daily_stats'] = count
+        
+        db.commit()
+        
+        total_deleted = sum(deleted_counts.values())
+        
+        return jsonify({
+            'success': True,
+            'message': f'Cleared {total_deleted} records',
+            'deleted': deleted_counts,
+            'cleared_at': datetime.utcnow().isoformat()
+        })
+        
+    except Exception as e:
+        db.rollback()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
