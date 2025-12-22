@@ -1305,11 +1305,19 @@ def update_note():
     {
         "session_id": "uuid",
         "note_id": 1,
-        "html": "formatted citation text"
+        "html": "formatted citation text",
+        "resolution": {  // Optional - for resolution tracking
+            "original_text": "...",
+            "final_text": "...",
+            "source_engine": "crossref",
+            "citation_type": "journal",
+            "similarity": 0.92  // Optional - frontend calculated
+        }
     }
     
     This re-processes the document with the updated note.
     Updated: 2025-12-06 - Added retry logic and file locking
+    Updated: 2025-12-22 - Added resolution tracking
     """
     try:
         data = request.get_json()
@@ -1323,6 +1331,7 @@ def update_note():
         session_id = data.get('session_id')
         note_id = data.get('note_id')
         new_html = data.get('html', '')
+        resolution_data = data.get('resolution')  # Resolution tracking data
         
         if not session_id or not note_id:
             return jsonify({
@@ -1381,6 +1390,24 @@ def update_note():
         results[note_idx]['formatted'] = new_html
         results[note_idx]['success'] = True
         sessions.set(session_id, 'results', results)
+        
+        # Log resolution event if tracking data provided
+        if resolution_data:
+            try:
+                from resolution_tracker import log_resolution
+                
+                log_resolution(
+                    session_id=session_id,
+                    citation_id=note_id,
+                    original_text=resolution_data.get('original_text', ''),
+                    final_text=resolution_data.get('final_text', new_html),
+                    alternative_index=resolution_data.get('alternative_index'),
+                    source_engine=resolution_data.get('source_engine'),
+                    citation_style=session_data.get('style'),
+                    citation_type=resolution_data.get('citation_type')
+                )
+            except Exception as e:
+                print(f"[API] Warning: Failed to log resolution: {e}")
         
         print(f"[API] Successfully updated note {note_id}")
         
@@ -2332,6 +2359,25 @@ def accept_reference():
             print(f"[API] Warning: Failed to save AcceptedCitation: {db_err}")
             # Don't fail the request if DB save fails
         
+        # Log resolution event if tracking data provided
+        resolution_data = data.get('resolution')
+        if resolution_data:
+            try:
+                from resolution_tracker import log_resolution
+                
+                log_resolution(
+                    session_id=session_id,
+                    citation_id=reference_id,
+                    original_text=resolution_data.get('original_text', ''),
+                    final_text=resolution_data.get('final_text', formatted),
+                    alternative_index=resolution_data.get('alternative_index'),
+                    source_engine=resolution_data.get('source_engine') or (option.get('source') if option else None),
+                    citation_style=style if 'selected_option' in data else session_data.get('style'),
+                    citation_type=resolution_data.get('citation_type') or (option.get('citation_type') if option else None)
+                )
+            except Exception as e:
+                print(f"[API] Warning: Failed to log resolution: {e}")
+        
         print(f"[API] Accepted reference {reference_id} for session {session_id[:8]}")
         
         # Build response
@@ -2618,6 +2664,27 @@ def confirm_verified():
         # Clean up verification cache for this citation
         sessions.set(session_id, verify_key, None)
         sessions.set(session_id, f'verify_original_{citation_id}', None)
+        
+        # Log resolution event
+        resolution_data = data.get('resolution')
+        if resolution_data:
+            try:
+                from resolution_tracker import log_resolution
+                
+                # If user kept original (selected_option == 'original'), it's user_provided
+                # If user selected from search results, it's accepted_alternative
+                log_resolution(
+                    session_id=session_id,
+                    citation_id=citation_id,
+                    original_text=resolution_data.get('original_text', original_text),
+                    final_text=formatted,
+                    alternative_index=None if selected_option == 'original' else int(selected_option),
+                    source_engine=resolution_data.get('source_engine') or (option_data.get('source') if option_data else None),
+                    citation_style=style,
+                    citation_type=resolution_data.get('citation_type') or (option_data.get('citation_type') if option_data else None)
+                )
+            except Exception as e:
+                print(f"[API] Warning: Failed to log resolution: {e}")
         
         print(f"[API] confirm-verified: Completed for citation {citation_id}")
         
