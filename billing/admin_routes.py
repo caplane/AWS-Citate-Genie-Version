@@ -1324,25 +1324,45 @@ def api_export_citations_csv():
         else:
             ts_str = ''
         
-        # Parse authors (stored as JSON array)
+        # Parse authors (stored as JSON array - may be dicts or strings)
         authors = c.authors or []
         author_cols = [''] * 8  # 4 authors x 2 (last, first)
         for i, author in enumerate(authors[:4]):
             if isinstance(author, dict):
+                # Structured format: {"family": "Caplan", "given": "Eric"}
                 author_cols[i*2] = author.get('family', author.get('last', ''))
                 author_cols[i*2 + 1] = author.get('given', author.get('first', ''))
             elif isinstance(author, str):
-                # Try to parse "Last, First" or "First Last"
+                # String format - need to parse carefully
+                # Check for "Last, First" format
                 if ',' in author:
                     parts = author.split(',', 1)
                     author_cols[i*2] = parts[0].strip()
                     author_cols[i*2 + 1] = parts[1].strip() if len(parts) > 1 else ''
                 else:
-                    parts = author.rsplit(' ', 1)
+                    parts = author.split()
                     if len(parts) == 2:
-                        author_cols[i*2] = parts[1]  # Last
-                        author_cols[i*2 + 1] = parts[0]  # First
+                        # Check for PubMed format: "LASTNAME INITIALS" (all caps last name + short initials)
+                        # e.g., "Caplan EM", "JAMES TG"
+                        is_pubmed_format = (
+                            (parts[0].isupper() or parts[0][0].isupper()) and 
+                            len(parts[1]) <= 4 and 
+                            parts[1].isupper()
+                        )
+                        if is_pubmed_format:
+                            # PubMed: "LastName Initials" → Last=parts[0], First=parts[1]
+                            author_cols[i*2] = parts[0].title() if parts[0].isupper() else parts[0]
+                            author_cols[i*2 + 1] = parts[1]
+                        else:
+                            # Standard "First Last" format
+                            author_cols[i*2] = parts[1]  # Last
+                            author_cols[i*2 + 1] = parts[0]  # First
+                    elif len(parts) > 2:
+                        # "First Middle Last" or "First Last Jr."
+                        author_cols[i*2] = parts[-1]  # Last word as last name
+                        author_cols[i*2 + 1] = ' '.join(parts[:-1])  # Rest as first
                     else:
+                        # Single word - just use as last name
                         author_cols[i*2] = author
         
         writer.writerow([
