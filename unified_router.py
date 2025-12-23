@@ -41,7 +41,7 @@ import re
 from typing import Optional, Tuple, List, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 
-from models import SourceComponents, CitationType
+from models import SourceComponents, CitationType, parse_author_name
 from config import NEWSPAPER_DOMAINS, GOV_AGENCY_MAP, ACADEMIC_AI_DOMAINS
 from detectors import detect_type, DetectionResult, is_url
 from extractors import extract_by_type
