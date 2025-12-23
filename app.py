@@ -2318,6 +2318,11 @@ def accept_reference():
             style = session_data.get('style', 'Chicago Manual of Style')
             
             # Build AcceptedCitation record
+            # Use authors_parsed (structured) if available, otherwise raw authors
+            authors_data = option.get('authors_parsed', []) if option else []
+            if not authors_data:
+                authors_data = option.get('authors', []) if option else []
+            
             accepted = AcceptedCitation(
                 session_id=session_id,
                 user_id=user_id,
@@ -2327,7 +2332,7 @@ def accept_reference():
                 citation_style=style,
                 citation_type=option.get('citation_type', '') if option else '',
                 title=option.get('title', '') if option else '',
-                authors=option.get('authors', []) if option else [],
+                authors=authors_data,
                 year=option.get('year', '') if option else '',
                 journal=option.get('journal', '') if option else '',
                 volume=option.get('volume', '') if option else '',
