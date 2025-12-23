@@ -152,9 +152,12 @@ class SmartURLRouter:
         Cost: $0.005/search (much cheaper than $0.05 AI call)
         
         Strategy:
-        1. For newspapers/magazines: Use Google News API (better indexing)
+        1. For newspapers/magazines: Use Google News API (returns structured author data!)
+           - SerpAPI Google News returns: source.authors = ["John Smith", "Jane Doe"]
+           - This gives us reliable author names for NYT, WSJ, WaPo, Guardian, etc.
         2. For other paywalled sites: Use regular Google Search
         3. If 0 results: Try keyword search fallback
+        4. If still no authors: AI fallback (if enabled)
         """
         if self.debug:
             print(f"[SmartURLRouter] Using SerpAPI for paywalled URL: {url[:60]}")
@@ -257,24 +260,51 @@ class SmartURLRouter:
                     # Google News might have different date field
                     date = result.get('date') or result.get('published_date') or result.get('timestamp')
                     
-                    # Try to get source/publication from result
-                    source_from_result = result.get('source') or result.get('source_name')
+                    # Extract source info - Google News returns source as dict with name and authors
+                    # Example: {"name": "CNN", "authors": ["John Smith", "Jane Doe"]}
+                    source_data = result.get('source', {})
+                    authors = []
+                    authors_parsed = []
                     
-                    authors = self._extract_authors_from_snippet(snippet)
-                    publication = source_from_result or self._extract_publication_name(url)
+                    if isinstance(source_data, dict):
+                        # Google News format: source.authors is an array of author names
+                        source_authors = source_data.get('authors', [])
+                        if source_authors and isinstance(source_authors, list):
+                            authors = source_authors
+                            # Parse author names into structured format
+                            for author_name in source_authors:
+                                if author_name and isinstance(author_name, str):
+                                    parts = author_name.strip().split()
+                                    if len(parts) >= 2:
+                                        authors_parsed.append({
+                                            'given': ' '.join(parts[:-1]),
+                                            'family': parts[-1]
+                                        })
+                                    elif len(parts) == 1:
+                                        authors_parsed.append({'family': parts[0], 'given': ''})
+                        
+                        publication = source_data.get('name') or self._extract_publication_name(url)
+                    else:
+                        # Fallback for non-dict source (regular Google search)
+                        publication = source_data or self._extract_publication_name(url)
+                    
+                    # Fallback to snippet parsing if no authors from source
+                    if not authors:
+                        authors = self._extract_authors_from_snippet(snippet)
                     
                     if self.debug:
                         print(f"[SmartURLRouter] Extracted title: {title}")
                         print(f"[SmartURLRouter] Extracted authors: {authors}")
+                        print(f"[SmartURLRouter] Extracted authors_parsed: {authors_parsed}")
                         print(f"[SmartURLRouter] Extracted date: {date}")
                         print(f"[SmartURLRouter] Extracted publication: {publication}")
                     
-                    # Create metadata object
+                    # Create metadata object with the authors_parsed from Google News
                     class Metadata:
                         def __init__(self):
                             self.title = title
                             self.authors = authors
-                            self.authors_parsed = []  # Structured: [{"family": "Smith", "given": "John"}]
+                            self.authors_parsed = authors_parsed  # From source.authors parsing
                             self.publication = publication
                             self.date = date
                             self.url = url
@@ -288,8 +318,7 @@ class SmartURLRouter:
                     
                     # AI AUTHOR FALLBACK: If we got title but no authors, use AI
                     if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
-                        if self.debug:
-                            print(f"[SmartURLRouter] Title found but no authors - trying AI fallback...")
+                        print(f"[SmartURLRouter] Title found but no authors - trying AI fallback for: {url[:60]}...")
                         try:
                             ai_result = lookup_newspaper_url(url, verify=False)  # No verification needed, just author extraction
                             if ai_result and ai_result.authors:
@@ -298,14 +327,14 @@ class SmartURLRouter:
                                 if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
                                     metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
-                                if self.debug:
-                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                                print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
                                 # Also grab date if AI found it and we didn't
                                 if not metadata.date and ai_result.date:
                                     metadata.date = ai_result.date
+                            else:
+                                print(f"[SmartURLRouter] ✗ AI returned no authors for: {url[:60]}")
                         except Exception as ai_err:
-                            if self.debug:
-                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                            print(f"[SmartURLRouter] ✗ AI author fallback FAILED: {ai_err}")
                     
                     if self.debug:
                         print(f"[SmartURLRouter] ✓ SerpAPI found: {metadata.title[:50] if metadata.title else 'N/A'}")
@@ -412,8 +441,7 @@ class SmartURLRouter:
                     
                     # AI AUTHOR FALLBACK: If we got title but no authors, use AI
                     if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
-                        if self.debug:
-                            print(f"[SmartURLRouter] TheNewsAPI: Title found but no authors - trying AI fallback...")
+                        print(f"[SmartURLRouter] TheNewsAPI: Title found but no authors - trying AI fallback...")
                         try:
                             ai_result = lookup_newspaper_url(url, verify=False)
                             if ai_result and ai_result.authors:
@@ -422,11 +450,11 @@ class SmartURLRouter:
                                 if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
                                     metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
-                                if self.debug:
-                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                                print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                            else:
+                                print(f"[SmartURLRouter] ✗ TheNewsAPI AI returned no authors")
                         except Exception as ai_err:
-                            if self.debug:
-                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                            print(f"[SmartURLRouter] ✗ TheNewsAPI AI fallback FAILED: {ai_err}")
                     
                     return metadata
         
@@ -519,8 +547,7 @@ class SmartURLRouter:
                     
                     # AI AUTHOR FALLBACK: If we got title but no authors, use AI
                     if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
-                        if self.debug:
-                            print(f"[SmartURLRouter] NewsData: Title found but no authors - trying AI fallback...")
+                        print(f"[SmartURLRouter] NewsData: Title found but no authors - trying AI fallback...")
                         try:
                             ai_result = lookup_newspaper_url(url, verify=False)
                             if ai_result and ai_result.authors:
@@ -529,11 +556,11 @@ class SmartURLRouter:
                                 if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
                                     metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
-                                if self.debug:
-                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                                print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                            else:
+                                print(f"[SmartURLRouter] ✗ NewsData AI returned no authors")
                         except Exception as ai_err:
-                            if self.debug:
-                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                            print(f"[SmartURLRouter] ✗ NewsData AI fallback FAILED: {ai_err}")
                     
                     return metadata
         
