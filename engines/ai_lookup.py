@@ -64,14 +64,15 @@ if not AI_PROVIDER_CHAIN:
     AI_PROVIDER_CHAIN = ['gemini', 'openai', 'claude']
 
 # Model configuration
-# Updated 2025-12-21: Use GPT-5.1 as primary model (cheaper than SerpAPI, better quality)
+# gpt-4o-mini is cost-effective for metadata extraction (~$0.00015/1K tokens)
+# gemini-2.0-flash is free tier friendly
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.1')  # Updated from gpt-4o
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')  # Cost-effective default
 CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
 
 # Specialized model for newspaper/magazine URL lookups
-# GPT-5.1: $0.625/1M input, $5.00/1M output - 5x cheaper than SerpAPI ($0.01/call)
-OPENAI_NEWSPAPER_MODEL = os.environ.get('OPENAI_NEWSPAPER_MODEL', 'gpt-5.1')
+# gpt-4o-mini: ~$0.00015/1K input, $0.0006/1K output - much cheaper than SerpAPI ($0.01/call)
+OPENAI_NEWSPAPER_MODEL = os.environ.get('OPENAI_NEWSPAPER_MODEL', 'gpt-4o-mini')
 
 # Check which providers are available
 AVAILABLE_PROVIDERS = []
@@ -169,7 +170,7 @@ def _call_openai(prompt: str, system: str, max_tokens: int, model: str = None) -
         prompt: User prompt
         system: System prompt  
         max_tokens: Max tokens for response
-        model: Model to use (defaults to OPENAI_MODEL, e.g. gpt-5.1)
+        model: Model to use (defaults to OPENAI_MODEL, e.g. gpt-4o-mini)
     """
     if not OPENAI_API_KEY:
         return None
@@ -197,7 +198,11 @@ def _call_openai(prompt: str, system: str, max_tokens: int, model: str = None) -
     if response.status_code == 429:
         raise Exception("Rate limited")
     
-    response.raise_for_status()
+    if response.status_code != 200:
+        error_msg = f"OpenAI API error {response.status_code} for model {use_model}: {response.text[:200]}"
+        print(f"[AI_Lookup] {error_msg}")
+        raise Exception(error_msg)
+    
     result = response.json()
     
     # Extract usage for cost tracking
@@ -434,10 +439,10 @@ def _call_claude_simple(prompt: str) -> Optional[str]:
 
 def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceComponents]:
     """
-    Look up newspaper/magazine article metadata using AI (GPT-5.1).
+    Look up newspaper/magazine article metadata using AI (gpt-4o-mini).
     
-    Uses GPT-5.1 model which is optimized for URL metadata extraction.
-    Cost: ~$0.002 per call vs SerpAPI at $0.01 per call (5x cheaper).
+    Uses gpt-4o-mini model which is cost-effective for metadata extraction.
+    Cost: ~$0.0002 per call vs SerpAPI at $0.01 per call (50x cheaper).
     
     IMPORTANT: AI cannot actually browse URLs via API. It guesses based on
     URL patterns and training data. When verify=True, results are checked
@@ -457,7 +462,7 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
     prompt = f"Extract citation metadata from this article URL:\n{url}"
     
     try:
-        # Use specialized newspaper model (gpt-5.1) for better accuracy and lower cost
+        # Use specialized newspaper model (gpt-4o-mini) for cost-effective metadata extraction
         response = _call_openai(prompt, NEWSPAPER_URL_SYSTEM, max_tokens=500, model=OPENAI_NEWSPAPER_MODEL)
         
         if not response:
