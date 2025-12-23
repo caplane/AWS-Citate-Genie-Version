@@ -1832,7 +1832,7 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
                 elif ai_type == CitationType.GOVERNMENT:
                     components = extract_by_type(query, CitationType.GOVERNMENT)
         
-        # Fallback: try books first, then journals
+        # Fallback: try books first, then journals (only if nothing found yet)
         if not components:
             components = _route_book(query)
         if not components:
