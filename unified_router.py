@@ -489,7 +489,7 @@ def _famous_paper_to_components(famous: dict, raw_source: str) -> SourceComponen
     ADDED 2025-12-22: Ensures authors_parsed is populated for proper 
     parenthetical formatting (Caplan 1998) rather than relying on string parsing.
     """
-    authors = famous.get('authors', [])
+    authors = famous.get('authors') or []  # Handle None case
     authors_parsed = []
     for author in authors:
         if author:
@@ -528,7 +528,7 @@ def _book_dict_to_components(data: dict, raw_source: str) -> Optional[SourceComp
     place = _resolve_publication_place(publisher, api_place)
     
     # Get authors and parse them into structured format
-    authors = data.get('authors', [])
+    authors = data.get('authors') or []  # Handle None case
     authors_parsed = []
     for author in authors:
         if author:
