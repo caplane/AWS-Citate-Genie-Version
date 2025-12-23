@@ -274,6 +274,7 @@ class SmartURLRouter:
                         def __init__(self):
                             self.title = title
                             self.authors = authors
+                            self.authors_parsed = []  # Structured: [{"family": "Smith", "given": "John"}]
                             self.publication = publication
                             self.date = date
                             self.url = url
@@ -293,6 +294,9 @@ class SmartURLRouter:
                             ai_result = lookup_newspaper_url(url, verify=False)  # No verification needed, just author extraction
                             if ai_result and ai_result.authors:
                                 metadata.authors = ai_result.authors
+                                # Also copy structured authors if available
+                                if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
+                                    metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
                                 if self.debug:
                                     print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
@@ -395,6 +399,7 @@ class SmartURLRouter:
                         def __init__(self):
                             self.title = title
                             self.authors = authors
+                            self.authors_parsed = []  # Structured: [{"family": "Smith", "given": "John"}]
                             self.publication = publication
                             self.date = date
                             self.url = url
@@ -413,6 +418,9 @@ class SmartURLRouter:
                             ai_result = lookup_newspaper_url(url, verify=False)
                             if ai_result and ai_result.authors:
                                 metadata.authors = ai_result.authors
+                                # Also copy structured authors if available
+                                if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
+                                    metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
                                 if self.debug:
                                     print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
@@ -498,6 +506,7 @@ class SmartURLRouter:
                         def __init__(self):
                             self.title = title
                             self.authors = authors
+                            self.authors_parsed = []  # Structured: [{"family": "Smith", "given": "John"}]
                             self.publication = publication
                             self.date = date
                             self.url = url
@@ -516,6 +525,9 @@ class SmartURLRouter:
                             ai_result = lookup_newspaper_url(url, verify=False)
                             if ai_result and ai_result.authors:
                                 metadata.authors = ai_result.authors
+                                # Also copy structured authors if available
+                                if hasattr(ai_result, 'authors_parsed') and ai_result.authors_parsed:
+                                    metadata.authors_parsed = ai_result.authors_parsed
                                 metadata.method_used += '+ai_author'
                                 if self.debug:
                                     print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
@@ -537,6 +549,7 @@ class SmartURLRouter:
             def __init__(self):
                 self.title = None
                 self.authors = []
+                self.authors_parsed = []
                 self.publication = None
                 self.date = None
                 self.url = url
