@@ -442,6 +442,88 @@ def _score_author_position(result: SourceComponents, query: str) -> float:
 
 
 # =============================================================================
+# AUTHOR NAME ENHANCEMENT: Prefer full names over initials
+# =============================================================================
+# PubMed returns initials (e.g., "Caplan EM"), Crossref often has full names.
+# When we have initials-only, try to get better names from Crossref.
+
+def _has_initials_only_authors(result: SourceComponents) -> bool:
+    """
+    Check if result has authors with initials-only first names.
+    
+    Returns True if ANY author has initials instead of full first name.
+    
+    Examples:
+    - {"given": "E.M.", "family": "Caplan"} → True (initials)
+    - {"given": "Eric", "family": "Caplan"} → False (full name)
+    - {"given": "Eric M.", "family": "Caplan"} → False (has full first name)
+    """
+    if not result or not result.authors_parsed:
+        return False
+    
+    for author in result.authors_parsed:
+        given = author.get('given', '').strip()
+        
+        # Skip organizational authors
+        if author.get('is_org') or author.get('is_institutional'):
+            continue
+        
+        if not given:
+            continue
+        
+        # Check if given name looks like initials only
+        # Remove periods and spaces
+        cleaned = given.replace(".", "").replace(" ", "")
+        
+        # Initials are typically 1-4 uppercase letters
+        if len(cleaned) <= 4 and cleaned.isupper():
+            return True
+    
+    return False
+
+
+def _enhance_author_names(result: SourceComponents) -> SourceComponents:
+    """
+    Try to enhance initials-only author names using Crossref.
+    
+    If result has a DOI and initials-only authors, fetch from Crossref
+    to get full author names.
+    
+    Args:
+        result: SourceComponents with potentially initials-only authors
+        
+    Returns:
+        Enhanced SourceComponents with full names if available,
+        or original result if enhancement not possible/needed.
+    """
+    # Only enhance if we have initials-only authors
+    if not _has_initials_only_authors(result):
+        return result
+    
+    # Need DOI to look up in Crossref
+    doi = result.doi
+    if not doi:
+        return result
+    
+    try:
+        # Try to get from Crossref
+        crossref_result = _crossref.get_by_id(doi)
+        
+        if crossref_result and crossref_result.authors_parsed:
+            # Check if Crossref has full names
+            if not _has_initials_only_authors(crossref_result):
+                print(f"[AuthorEnhance] ✓ Enhanced authors from Crossref: {crossref_result.authors}")
+                # Copy full author names to original result
+                result.authors = crossref_result.authors
+                result.authors_parsed = crossref_result.authors_parsed
+                return result
+    except Exception as e:
+        print(f"[AuthorEnhance] Crossref lookup failed: {e}")
+    
+    return result
+
+
+# =============================================================================
 # WRAPPER: CONVERT SUPERLEGAL.PY DICT → SourceComponents
 # =============================================================================
 
@@ -2170,6 +2252,8 @@ def get_multiple_citations(query: str, style: str = "chicago", limit: int = 6, c
                     )
                     print(f"[UnifiedRouter] PubMed duplicate check: {is_duplicate}")
                     if not is_duplicate:
+                        # Try to enhance initials-only author names from Crossref
+                        pm_result = _enhance_author_names(pm_result)
                         formatted = formatter.format(pm_result)
                         results.append((pm_result, formatted, "PubMed"))
                         print(f"[UnifiedRouter] ✓ Added PubMed result")
