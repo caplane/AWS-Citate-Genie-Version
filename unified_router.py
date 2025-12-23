@@ -197,8 +197,32 @@ if SMART_ROUTER_AVAILABLE:
                         citation_type=CitationType.URL
                     )
                 else:
-                    # No metadata from smart router, use GenericURL
-                    return self.fallback.fetch_by_url(url)
+                    # Not complete - but check if we have institutional author
+                    has_institutional_author = (
+                        hasattr(metadata, 'institutional_author') or 
+                        (metadata.authors and len(metadata.authors) > 0)
+                    )
+                    
+                    if has_institutional_author:
+                        # We have authors but need title - use GenericURL for title only
+                        print(f"[SmartRouter] Institutional author detected: {metadata.authors}")
+                        fallback_result = self.fallback.fetch_by_url(url)
+                        
+                        # Merge: take title from fallback, keep institutional author
+                        authors_parsed = getattr(metadata, 'authors_parsed', [])
+                        
+                        return SourceComponents(
+                            title=fallback_result.title if fallback_result else None,
+                            authors=metadata.authors,  # Keep institutional author
+                            authors_parsed=authors_parsed,  # Keep institutional author parsed
+                            newspaper=fallback_result.newspaper if fallback_result else None,
+                            date=fallback_result.date if fallback_result else metadata.date,
+                            url=url,
+                            citation_type=CitationType.URL
+                        )
+                    else:
+                        # No metadata from smart router, use GenericURL
+                        return self.fallback.fetch_by_url(url)
             
             except Exception as e:
                 print(f"[SmartRouter] Error, using GenericURL: {e}")
