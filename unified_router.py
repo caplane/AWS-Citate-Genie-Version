@@ -1801,18 +1801,18 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
         # Check famous papers cache first
         famous = find_famous_paper(query)
         if famous:
-            metadata = _famous_paper_to_components(famous, query)
+            components = _famous_paper_to_components(famous, query)
         else:
             components = _route_journal(query, gist=context)
     
     elif detection.citation_type == CitationType.NEWSPAPER:
-        metadata = extract_by_type(query, CitationType.NEWSPAPER)
+        components = extract_by_type(query, CitationType.NEWSPAPER)
     
     elif detection.citation_type == CitationType.GOVERNMENT:
-        metadata = extract_by_type(query, CitationType.GOVERNMENT)
+        components = extract_by_type(query, CitationType.GOVERNMENT)
     
     elif detection.citation_type == CitationType.INTERVIEW:
-        metadata = extract_by_type(query, CitationType.INTERVIEW)
+        components = extract_by_type(query, CitationType.INTERVIEW)
     
     else:
         # UNKNOWN: Try AI classification first
@@ -1828,14 +1828,14 @@ def route_citation(query: str, style: str = "chicago", context: str = "", compon
                 elif ai_type in [CitationType.JOURNAL, CitationType.MEDICAL]:
                     components = _route_journal(query, gist=context)
                 elif ai_type == CitationType.NEWSPAPER:
-                    metadata = extract_by_type(query, CitationType.NEWSPAPER)
+                    components = extract_by_type(query, CitationType.NEWSPAPER)
                 elif ai_type == CitationType.GOVERNMENT:
-                    metadata = extract_by_type(query, CitationType.GOVERNMENT)
+                    components = extract_by_type(query, CitationType.GOVERNMENT)
         
         # Fallback: try books first, then journals
-        if not metadata:
+        if not components:
             components = _route_book(query)
-        if not metadata:
+        if not components:
             components = _route_journal(query, gist=context)
     
     # Format and return
