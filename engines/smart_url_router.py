@@ -330,7 +330,47 @@ class SmartURLRouter:
                                 print(f"[SmartURLRouter] Keyword search found {len(results)} results")
                 
                 if results:
-                    result = results[0]
+                    # IMPORTANT: Verify the result matches our input URL
+                    # Google News searches by keywords, so it may return wrong articles
+                    matched_result = None
+                    
+                    # Extract key identifier from input URL for matching
+                    url_path = url.lower().split('/')[-1].replace('.html', '').replace('.htm', '')
+                    url_parts = set(url_path.replace('-', ' ').replace('_', ' ').split())
+                    
+                    if self.debug:
+                        print(f"[SmartURLRouter] Looking for URL match. Key parts: {url_parts}")
+                    
+                    for r in results:
+                        result_link = r.get('link', '').lower()
+                        
+                        # Direct URL match
+                        if url.lower() in result_link or result_link in url.lower():
+                            matched_result = r
+                            if self.debug:
+                                print(f"[SmartURLRouter] ✓ Direct URL match found")
+                            break
+                        
+                        # Partial path match - check if key parts of URL appear in result
+                        result_path = result_link.split('/')[-1].replace('.html', '').replace('.htm', '')
+                        result_parts = set(result_path.replace('-', ' ').replace('_', ' ').split())
+                        
+                        # If 2+ significant words match, consider it a match
+                        overlap = url_parts & result_parts
+                        significant_overlap = [w for w in overlap if len(w) > 3]
+                        
+                        if len(significant_overlap) >= 2:
+                            matched_result = r
+                            if self.debug:
+                                print(f"[SmartURLRouter] ✓ Partial match found via: {significant_overlap}")
+                            break
+                    
+                    if not matched_result:
+                        if self.debug:
+                            print(f"[SmartURLRouter] ✗ No URL match in {len(results)} results, using first result as fallback")
+                        matched_result = results[0]
+                    
+                    result = matched_result
                     
                     # Extract metadata (works for both news_results and organic_results)
                     title = result.get('title')
@@ -461,7 +501,7 @@ class SmartURLRouter:
             )
             
             # Log the call (free API, no cost)
-            log_api_call('thenewsapi', query=url, function='url_metadata', cost=0.0)
+            log_api_call('thenewsapi', query=url, function='url_metadata')
             
             if response.status_code == 200:
                 data = response.json()
@@ -567,7 +607,7 @@ class SmartURLRouter:
             )
             
             # Log the call (free API, no cost)
-            log_api_call('newsdata', query=url, function='url_metadata', cost=0.0)
+            log_api_call('newsdata', query=url, function='url_metadata')
             
             if response.status_code == 200:
                 data = response.json()

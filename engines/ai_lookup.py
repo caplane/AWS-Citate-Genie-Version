@@ -64,15 +64,15 @@ if not AI_PROVIDER_CHAIN:
     AI_PROVIDER_CHAIN = ['gemini', 'openai', 'claude']
 
 # Model configuration
-# gpt-4o-mini is cost-effective for metadata extraction (~$0.00015/1K tokens)
+# gpt-5.2 is OpenAI's flagship model (released Dec 2025)
 # gemini-2.0-flash is free tier friendly
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')  # Cost-effective default
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.2')  # OpenAI flagship model
 CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
 
 # Specialized model for newspaper/magazine URL lookups
-# gpt-4o-mini: ~$0.00015/1K input, $0.0006/1K output - much cheaper than SerpAPI ($0.01/call)
-OPENAI_NEWSPAPER_MODEL = os.environ.get('OPENAI_NEWSPAPER_MODEL', 'gpt-4o-mini')
+# gpt-5.2: $1.75/1M input, $14.00/1M output
+OPENAI_NEWSPAPER_MODEL = os.environ.get('OPENAI_NEWSPAPER_MODEL', 'gpt-5.2')
 
 # Check which providers are available
 AVAILABLE_PROVIDERS = []
@@ -170,7 +170,7 @@ def _call_openai(prompt: str, system: str, max_tokens: int, model: str = None) -
         prompt: User prompt
         system: System prompt  
         max_tokens: Max tokens for response
-        model: Model to use (defaults to OPENAI_MODEL, e.g. gpt-4o-mini)
+        model: Model to use (defaults to OPENAI_MODEL, e.g. gpt-5.2)
     """
     if not OPENAI_API_KEY:
         return None
@@ -439,9 +439,9 @@ def _call_claude_simple(prompt: str) -> Optional[str]:
 
 def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceComponents]:
     """
-    Look up newspaper/magazine article metadata using AI (gpt-4o-mini).
+    Look up newspaper/magazine article metadata using AI (gpt-5.2).
     
-    Uses gpt-4o-mini model which is cost-effective for metadata extraction.
+    Uses gpt-5.2 model for high-quality metadata extraction.
     Cost: ~$0.0002 per call vs SerpAPI at $0.01 per call (50x cheaper).
     
     IMPORTANT: AI cannot actually browse URLs via API. It guesses based on
@@ -462,7 +462,7 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
     prompt = f"Extract citation metadata from this article URL:\n{url}"
     
     try:
-        # Use specialized newspaper model (gpt-4o-mini) for cost-effective metadata extraction
+        # Use specialized newspaper model (gpt-5.2) for high-quality metadata extraction
         response = _call_openai(prompt, NEWSPAPER_URL_SYSTEM, max_tokens=500, model=OPENAI_NEWSPAPER_MODEL)
         
         if not response:
