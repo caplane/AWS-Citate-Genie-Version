@@ -607,7 +607,11 @@ class GoogleBooksAPI:
         if not query: return []
         candidates = []
         try:
-            cleaned_query = GoogleBooksAPI.clean_search_term(query)
+            # IMPORTANT: Don't clean ISBN queries - the "isbn:" prefix and number must be preserved
+            if query.lower().startswith('isbn:'):
+                cleaned_query = query  # Keep as-is for ISBN lookups
+            else:
+                cleaned_query = GoogleBooksAPI.clean_search_term(query)
             
             # Try multiple query strategies
             queries_to_try = [cleaned_query]
