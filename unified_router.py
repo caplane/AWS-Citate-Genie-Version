@@ -1119,18 +1119,23 @@ def _route_journal(query: str, gist: str = "") -> Optional[SourceComponents]:
     Author-position scoring ensures that queries like "Caplan trains brains" match
     the Eric Caplan paper (sole author) rather than Louis Caplan (neurologist).
     """
-    # Layer 1-2: Check famous papers cache first (instant lookup for 10,000 most-cited)
+    # Layer 1: Check famous papers cache first (instant lookup for 10,000 most-cited)
     famous = find_famous_paper(query)
     if famous:
+        print("[UnifiedRouter] Found via Famous Papers cache")
+        # Use the cached data directly - it has everything we need
+        # Optionally try Crossref for richer metadata, but don't require it
         try:
             result = _crossref.get_by_id(famous["doi"])
             if result:
-                print("[UnifiedRouter] Found via Famous Papers cache")
+                print("[UnifiedRouter] Enriched with Crossref metadata")
                 return result
         except Exception:
             pass
+        # Fall back to using cached data directly
+        return _famous_paper_to_components(famous, query)
     
-    # Layer 3: Check for DOI in query (instant lookup)
+    # Layer 2: Check for DOI in query (instant lookup)
     doi_match = re.search(r'(10\.\d{4,}/[^\s]+)', query)
     if doi_match:
         doi = doi_match.group(1).rstrip('.,;')
