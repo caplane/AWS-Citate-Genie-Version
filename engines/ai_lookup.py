@@ -486,12 +486,18 @@ def lookup_newspaper_url(url: str, verify: bool = False) -> Optional[SourceCompo
             if year_match:
                 year = year_match.group(0)
         
+        # Parse authors into structured format
+        raw_authors = data.get('authors', [])
+        from models import parse_author_name
+        authors_parsed = [parse_author_name(a) for a in raw_authors if a]
+        
         result = SourceComponents(
             citation_type=CitationType.NEWSPAPER,
             raw_source=url,
             source_engine=f"AI Lookup ({OPENAI_NEWSPAPER_MODEL})",
             title=data.get('title', ''),
-            authors=data.get('authors', []),
+            authors=raw_authors,
+            authors_parsed=authors_parsed,
             newspaper=data.get('publication', ''),
             date=date_str,
             year=year,
