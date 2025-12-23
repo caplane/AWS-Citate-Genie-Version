@@ -72,9 +72,9 @@ class ChicagoFormatter(BaseFormatter):
         """
         parts = []
         
-        # Authors
+        # Authors (use structured data when available)
         if m.authors:
-            parts.append(self._format_authors(m.authors))
+            parts.append(self._format_authors(m.authors, authors_parsed=m.authors_parsed))
         
         # Title in quotes
         if m.title:
@@ -123,9 +123,9 @@ class ChicagoFormatter(BaseFormatter):
         """
         parts = []
         
-        # Authors
+        # Authors (use structured data when available)
         if m.authors:
-            parts.append(self._format_authors(m.authors) + ",")
+            parts.append(self._format_authors(m.authors, authors_parsed=m.authors_parsed) + ",")
         
         # Title in italics
         if m.title:
@@ -317,9 +317,9 @@ class ChicagoFormatter(BaseFormatter):
         """
         parts = []
         
-        # Author
+        # Author (use structured data when available)
         if m.authors:
-            parts.append(self._format_authors(m.authors) + ",")
+            parts.append(self._format_authors(m.authors, authors_parsed=m.authors_parsed) + ",")
         
         # Title in quotes
         if m.title:
@@ -382,18 +382,44 @@ class ChicagoFormatter(BaseFormatter):
     
     def _format_url(self, m: SourceComponents) -> str:
         """
-        Format generic URL.
+        Format generic URL/website citation.
         
-        Pattern: "Title," URL, accessed Date.
+        Chicago patterns:
+        - With author: Author, "Title," Website Name, Date, URL.
+        - Institutional: Organization Name, "Title," URL, accessed Date.
+        - No author: "Title," URL, accessed Date.
         """
         parts = []
         
+        # Author (including institutional authors like CDC, WHO, etc.)
+        if m.authors:
+            author = m.authors[0]
+            
+            # Check if institutional author (stored in family/last name field only)
+            is_institutional = (
+                m.authors_parsed and 
+                len(m.authors_parsed) > 0 and 
+                m.authors_parsed[0].get('is_institutional', False)
+            )
+            
+            if is_institutional:
+                # Institutional author: use name directly (it's in the family field)
+                parts.append(f"{author},")
+            else:
+                # Personal author(s): format with _format_authors (use structured data)
+                author_str = self._format_authors(m.authors, authors_parsed=m.authors_parsed)
+                if author_str:
+                    parts.append(f"{author_str},")
+        
+        # Title in quotes
         if m.title:
             parts.append(f'"{m.title},"')
         
+        # URL
         if m.url:
             parts.append(m.url)
         
+        # Access date
         if m.access_date:
             parts.append(f"accessed {m.access_date}")
         

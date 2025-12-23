@@ -108,7 +108,8 @@ class BaseFormatter(ABC):
         self,
         authors: list,
         max_authors: int = 3,
-        et_al_threshold: int = 3
+        et_al_threshold: int = 3,
+        authors_parsed: list = None
     ) -> str:
         """
         Format author list according to style conventions.
@@ -119,13 +120,32 @@ class BaseFormatter(ABC):
         - 3+ authors: "First Last et al."
         
         Args:
-            authors: List of author names
+            authors: List of author names (raw strings, fallback)
             max_authors: Max authors to list before et al.
             et_al_threshold: Number of authors that triggers et al.
+            authors_parsed: Structured author data [{"given": "Eric", "family": "Caplan"}, ...]
             
         Returns:
             Formatted author string
         """
+        # Prefer structured data if available
+        if authors_parsed and len(authors_parsed) > 0:
+            formatted_names = []
+            for author in authors_parsed:
+                name = self._format_single_author(author)
+                if name:
+                    formatted_names.append(name)
+            
+            if formatted_names:
+                if len(formatted_names) == 1:
+                    return formatted_names[0]
+                if len(formatted_names) == 2:
+                    return f"{formatted_names[0]} and {formatted_names[1]}"
+                if len(formatted_names) >= et_al_threshold:
+                    return f"{formatted_names[0]} et al."
+                return ", ".join(formatted_names[:-1]) + f", and {formatted_names[-1]}"
+        
+        # Fallback to raw author strings
         if not authors:
             return ""
         
@@ -140,6 +160,85 @@ class BaseFormatter(ABC):
         
         # 3+ but below threshold
         return ", ".join(authors[:-1]) + f", and {authors[-1]}"
+    
+    def _format_single_author(self, author: dict) -> str:
+        """
+        Format a single author from structured data.
+        
+        Handles:
+        - Full names: {"given": "Eric", "family": "Caplan"} → "Eric Caplan"
+        - Initials: {"given": "E.M.", "family": "Caplan"} → "E. M. Caplan"
+        - Organizations: {"family": "CDC", "is_org": True} → "CDC"
+        - Institutional: {"family": "CDC", "is_institutional": True} → "CDC"
+        
+        Args:
+            author: Dict with "given" and/or "family" keys
+            
+        Returns:
+            Formatted name string
+        """
+        if not author:
+            return ""
+        
+        family = author.get('family', '').strip()
+        given = author.get('given', '').strip()
+        
+        # Organizational/institutional authors - use name as-is
+        if author.get('is_org') or author.get('is_institutional'):
+            return family
+        
+        # Format initials with proper spacing: "E.M." → "E. M."
+        if given:
+            given = self._format_initials_with_spacing(given)
+        
+        # Combine given + family
+        if given and family:
+            return f"{given} {family}"
+        elif family:
+            return family
+        elif given:
+            return given
+        else:
+            return ""
+    
+    def _format_initials_with_spacing(self, name: str) -> str:
+        """
+        Add spacing between initials for proper formatting.
+        
+        Examples:
+        - "E.M." → "E. M."
+        - "E.M.C." → "E. M. C."
+        - "Eric" → "Eric" (unchanged)
+        - "E. M." → "E. M." (unchanged)
+        
+        Args:
+            name: Given name or initials
+            
+        Returns:
+            Properly spaced name/initials
+        """
+        if not name:
+            return ""
+        
+        # Check if it looks like initials (short, has periods, mostly caps)
+        cleaned = name.replace(".", "").replace(" ", "")
+        
+        # If it's a full name (longer than 3 chars, no periods originally, or mixed case)
+        if len(cleaned) > 3 and '.' not in name:
+            return name
+        
+        # If already has spaces after periods, it's properly formatted
+        if '. ' in name:
+            return name
+        
+        # Add spaces after periods: "E.M." → "E. M."
+        result = ""
+        for i, char in enumerate(name):
+            result += char
+            if char == '.' and i < len(name) - 1 and name[i + 1] != ' ':
+                result += ' '
+        
+        return result.strip()
     
     def _get_last_name(self, full_name: str) -> str:
         """
