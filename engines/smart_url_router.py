@@ -25,6 +25,14 @@ import time
 from config import SERPAPI_KEY, THENEWSAPI_KEY, NEWSDATA_KEY
 from cost_tracker import log_api_call
 
+# AI fallback for author extraction when SERPAPI/News APIs return title but no author
+try:
+    from engines.ai_lookup import lookup_newspaper_url
+    AI_AUTHOR_FALLBACK = True
+except ImportError:
+    AI_AUTHOR_FALLBACK = False
+    lookup_newspaper_url = None
+
 
 # News/magazine domains that should use news APIs
 NEWS_DOMAINS = {
@@ -277,6 +285,24 @@ class SmartURLRouter:
                     
                     metadata = Metadata()
                     
+                    # AI AUTHOR FALLBACK: If we got title but no authors, use AI
+                    if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
+                        if self.debug:
+                            print(f"[SmartURLRouter] Title found but no authors - trying AI fallback...")
+                        try:
+                            ai_result = lookup_newspaper_url(url, verify=False)  # No verification needed, just author extraction
+                            if ai_result and ai_result.authors:
+                                metadata.authors = ai_result.authors
+                                metadata.method_used += '+ai_author'
+                                if self.debug:
+                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                                # Also grab date if AI found it and we didn't
+                                if not metadata.date and ai_result.date:
+                                    metadata.date = ai_result.date
+                        except Exception as ai_err:
+                            if self.debug:
+                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                    
                     if self.debug:
                         print(f"[SmartURLRouter] ✓ SerpAPI found: {metadata.title[:50] if metadata.title else 'N/A'}")
                         print(f"[SmartURLRouter] is_complete: {metadata.is_complete()}")
@@ -377,7 +403,24 @@ class SmartURLRouter:
                         def is_complete(self):
                             return bool(self.title)
                     
-                    return Metadata()
+                    metadata = Metadata()
+                    
+                    # AI AUTHOR FALLBACK: If we got title but no authors, use AI
+                    if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
+                        if self.debug:
+                            print(f"[SmartURLRouter] TheNewsAPI: Title found but no authors - trying AI fallback...")
+                        try:
+                            ai_result = lookup_newspaper_url(url, verify=False)
+                            if ai_result and ai_result.authors:
+                                metadata.authors = ai_result.authors
+                                metadata.method_used += '+ai_author'
+                                if self.debug:
+                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                        except Exception as ai_err:
+                            if self.debug:
+                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                    
+                    return metadata
         
         except Exception as e:
             if self.debug:
@@ -463,7 +506,24 @@ class SmartURLRouter:
                         def is_complete(self):
                             return bool(self.title)
                     
-                    return Metadata()
+                    metadata = Metadata()
+                    
+                    # AI AUTHOR FALLBACK: If we got title but no authors, use AI
+                    if metadata.title and not metadata.authors and AI_AUTHOR_FALLBACK:
+                        if self.debug:
+                            print(f"[SmartURLRouter] NewsData: Title found but no authors - trying AI fallback...")
+                        try:
+                            ai_result = lookup_newspaper_url(url, verify=False)
+                            if ai_result and ai_result.authors:
+                                metadata.authors = ai_result.authors
+                                metadata.method_used += '+ai_author'
+                                if self.debug:
+                                    print(f"[SmartURLRouter] ✓ AI found authors: {metadata.authors}")
+                        except Exception as ai_err:
+                            if self.debug:
+                                print(f"[SmartURLRouter] AI author fallback failed: {ai_err}")
+                    
+                    return metadata
         
         except Exception as e:
             if self.debug:
