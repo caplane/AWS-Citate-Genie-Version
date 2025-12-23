@@ -184,9 +184,13 @@ if SMART_ROUTER_AVAILABLE:
                 if metadata.is_complete():
                     print(f"[SmartRouter] ✓ Resolved via {metadata.method_used}: {metadata.title[:50] if metadata.title else 'N/A'}")
                     
+                    # Get authors_parsed if available
+                    authors_parsed = getattr(metadata, 'authors_parsed', [])
+                    
                     return SourceComponents(
                         title=metadata.title,
                         authors=metadata.authors,
+                        authors_parsed=authors_parsed,
                         newspaper=metadata.publication,  # Fixed: was publication_name
                         date=metadata.date,
                         url=url,
