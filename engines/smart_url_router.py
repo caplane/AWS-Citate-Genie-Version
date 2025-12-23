@@ -75,6 +75,77 @@ NEWS_DOMAINS = {
     'npr.org',
 }
 
+# Institutional author mapping: domain → official author name
+# These are organizations where the institution IS the author (not individual writers)
+INSTITUTIONAL_AUTHORS = {
+    # US Government - Health
+    'cdc.gov': 'Centers for Disease Control and Prevention',
+    'nih.gov': 'National Institutes of Health',
+    'fda.gov': 'U.S. Food and Drug Administration',
+    'hhs.gov': 'U.S. Department of Health and Human Services',
+    'cms.gov': 'Centers for Medicare & Medicaid Services',
+    'samhsa.gov': 'Substance Abuse and Mental Health Services Administration',
+    
+    # US Government - Other
+    'whitehouse.gov': 'The White House',
+    'state.gov': 'U.S. Department of State',
+    'justice.gov': 'U.S. Department of Justice',
+    'treasury.gov': 'U.S. Department of the Treasury',
+    'ed.gov': 'U.S. Department of Education',
+    'dol.gov': 'U.S. Department of Labor',
+    'epa.gov': 'U.S. Environmental Protection Agency',
+    'energy.gov': 'U.S. Department of Energy',
+    'defense.gov': 'U.S. Department of Defense',
+    'dhs.gov': 'U.S. Department of Homeland Security',
+    'usda.gov': 'U.S. Department of Agriculture',
+    'doi.gov': 'U.S. Department of the Interior',
+    'commerce.gov': 'U.S. Department of Commerce',
+    'va.gov': 'U.S. Department of Veterans Affairs',
+    'hud.gov': 'U.S. Department of Housing and Urban Development',
+    'dot.gov': 'U.S. Department of Transportation',
+    'gao.gov': 'U.S. Government Accountability Office',
+    'cbo.gov': 'Congressional Budget Office',
+    'bls.gov': 'Bureau of Labor Statistics',
+    'census.gov': 'U.S. Census Bureau',
+    'ssa.gov': 'Social Security Administration',
+    'irs.gov': 'Internal Revenue Service',
+    'fbi.gov': 'Federal Bureau of Investigation',
+    'cia.gov': 'Central Intelligence Agency',
+    'nasa.gov': 'National Aeronautics and Space Administration',
+    'nsf.gov': 'National Science Foundation',
+    'nist.gov': 'National Institute of Standards and Technology',
+    'noaa.gov': 'National Oceanic and Atmospheric Administration',
+    'usgs.gov': 'U.S. Geological Survey',
+    'fcc.gov': 'Federal Communications Commission',
+    'ftc.gov': 'Federal Trade Commission',
+    'sec.gov': 'U.S. Securities and Exchange Commission',
+    'supremecourt.gov': 'Supreme Court of the United States',
+    'uscourts.gov': 'United States Courts',
+    'congress.gov': 'U.S. Congress',
+    
+    # International Organizations
+    'who.int': 'World Health Organization',
+    'un.org': 'United Nations',
+    'worldbank.org': 'World Bank',
+    'imf.org': 'International Monetary Fund',
+    'wto.org': 'World Trade Organization',
+    'oecd.org': 'Organisation for Economic Co-operation and Development',
+    'nato.int': 'North Atlantic Treaty Organization',
+    'europa.eu': 'European Union',
+    'ecb.europa.eu': 'European Central Bank',
+    
+    # UK Government
+    'gov.uk': 'UK Government',
+    'nhs.uk': 'National Health Service',
+    'bankofengland.co.uk': 'Bank of England',
+    
+    # Other Major Institutions
+    'federalreserve.gov': 'Board of Governors of the Federal Reserve System',
+    'archives.gov': 'National Archives and Records Administration',
+    'loc.gov': 'Library of Congress',
+    'smithsonian.edu': 'Smithsonian Institution',
+}
+
 # Domains known to block direct fetching (subset of NEWS_DOMAINS)
 PAYWALLED_DOMAINS = {
     'washingtonpost.com',
@@ -121,6 +192,14 @@ class SmartURLRouter:
         Returns metadata object compatible with wrapper.
         """
         domain = self._extract_domain(url)
+        
+        # FIRST: Check for institutional authors (government, organizations)
+        # These domains have known institutional authors - no need to search
+        institutional_author = self._get_institutional_author(domain)
+        if institutional_author:
+            if self.debug:
+                print(f"[SmartURLRouter] Institutional author detected: {institutional_author}")
+            return self._institutional_metadata(url, institutional_author)
         
         # For news domains, try news APIs first (free!)
         if domain in NEWS_DOMAINS:
@@ -587,6 +666,49 @@ class SmartURLRouter:
         
         return EmptyMetadata()
     
+    def _get_institutional_author(self, domain: str) -> str:
+        """
+        Check if domain belongs to an institution that should be the author.
+        
+        Returns institutional author name if found, None otherwise.
+        """
+        # Direct match
+        if domain in INSTITUTIONAL_AUTHORS:
+            return INSTITUTIONAL_AUTHORS[domain]
+        
+        # Check for subdomains (e.g., 'ncbi.nlm.nih.gov' should match 'nih.gov')
+        parts = domain.split('.')
+        for i in range(len(parts) - 1):
+            parent_domain = '.'.join(parts[i:])
+            if parent_domain in INSTITUTIONAL_AUTHORS:
+                return INSTITUTIONAL_AUTHORS[parent_domain]
+        
+        return None
+    
+    def _institutional_metadata(self, url: str, author: str):
+        """
+        Return metadata for institutional URLs with the institution as author.
+        
+        These URLs need title extraction but we already know the author.
+        """
+        class InstitutionalMetadata:
+            def __init__(self, url, author):
+                self.title = None  # Will be filled by GenericURL or AI
+                self.authors = [author]
+                self.authors_parsed = [{'family': author, 'given': '', 'is_institutional': True}]
+                self.publication = None
+                self.date = None
+                self.url = url
+                self.method_used = 'institutional_author'
+                self.institutional_author = author  # Flag for formatters
+            
+            def is_complete(self):
+                # Return False so title can still be extracted
+                # But authors are already set correctly
+                return False
+        
+        return InstitutionalMetadata(url, author)
+    
     def _extract_domain(self, url: str) -> str:
         """Extract clean domain from URL."""
         parsed = urlparse(url)
@@ -644,8 +766,9 @@ class SmartURLRouter:
         parsed = urlparse(url)
         path = parsed.path
         
-        # Remove leading/trailing slashes
+        # Remove leading/trailing slashes and file extensions
         path = path.strip('/')
+        path = re.sub(r'\.(html?|php|aspx?)$', '', path, flags=re.IGNORECASE)
         
         # Split on slashes and hyphens
         parts = re.split(r'[/\-_]', path)
@@ -654,11 +777,14 @@ class SmartURLRouter:
         # - Date-like patterns (2024, 08, 02)
         # - Short parts (< 3 chars)
         # - Common URL segments
-        skip_words = {'style', 'media', 'article', 'post', 'blog', 'news', 'story'}
+        # - Hash codes (alphanumeric strings that look like IDs)
+        skip_words = {'style', 'media', 'article', 'post', 'blog', 'news', 'story', 
+                      'opinion', 'world', 'politics', 'books', 'us', 'uk', 'dec', 'jan',
+                      'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov'}
         
         keywords = []
         for part in parts:
-            # Skip dates
+            # Skip dates (pure numbers)
             if re.match(r'^\d+$', part):
                 continue
             # Skip short parts
@@ -666,6 +792,9 @@ class SmartURLRouter:
                 continue
             # Skip common URL words
             if part.lower() in skip_words:
+                continue
+            # Skip hash codes (8+ char alphanumeric that aren't real words)
+            if re.match(r'^[a-f0-9]{8,}$', part.lower()):
                 continue
             
             keywords.append(part)
